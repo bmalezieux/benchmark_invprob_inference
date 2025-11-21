@@ -1,15 +1,10 @@
-My Benchopt Benchmark
+Benchmarking inference for large scale inverse problems 
 =====================
 |Build Status| |Python 3.10+|
 
 Benchopt is a package to simplify and make more transparent and
 reproducible comparisons of optimization methods.
-This benchmark is dedicated to solvers of **describe your problem**:
-
-
-$$\\min_{\\beta} f(X, \\beta),$$
-
-where $X$ is the matrix of data and $\\beta$ is the optimization variable.
+This benchmark is dedicated to solvers of inverse problems in large scale settings.
 
 Install
 --------
