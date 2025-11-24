@@ -8,7 +8,7 @@ objective:
 # Dataset filters (with parameters) - smaller size for faster distributed test
 dataset:
   - highres_color_image:
-      image_size: 2048
+      image_size: 1024
       num_operators: 8
       noise_level: 0.1
 
@@ -18,13 +18,10 @@ solver:
       denoiser: drunet
       denoiser_sigma: 0.005
       step_size: 0.1
-      patch_size: 256
-      receptive_field_size: 64
-      max_batch_size: 8
       init_method: ["zeros"]
-      slurm_gres, slurm_tasks_per_node, distribute_physics, distribute_denoiser: [
-        ["gpu:1", 1, false, false],
-        ["gpu:2", 2, true, true],
+      slurm_gres, slurm_ntasks_per_node, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size: [
+        ["gpu:1", 1, false, false, 0, 0, 0],
+        ["gpu:2", 2, true, true, 448, 32, 0],
       ]
 
 

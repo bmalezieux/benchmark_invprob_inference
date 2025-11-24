@@ -1,145 +1,18 @@
-import os
-from pathlib import Path
+"""High-resolution color image dataset for inverse problems benchmarking.
+
+This dataset uses a real color image from the CBSD dataset and applies
+multiple anisotropic Gaussian blur operators with equiangular orientations.
+"""
 import torch
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
+import numpy as np
 
 from deepinv.physics import GaussianNoise, stack
 from deepinv.physics.blur import Blur, gaussian_blur
-from deepinv.utils.demo import download_example, load_image
 
 from benchopt import BaseDataset
-
-
-def load_cached_example(name, cache_dir=None, **kwargs):
-    """Load example image with local caching.
-    
-    Downloads the image from HuggingFace if not already cached locally.
-    This allows the benchmark to run on cluster nodes without internet access.
-    
-    Parameters
-    ----------
-    name : str
-        Filename of the image from the HuggingFace dataset.
-    cache_dir : str or Path, optional
-        Directory to cache downloaded images. 
-        Defaults to 'data' folder in benchmark root.
-    **kwargs
-        Keyword arguments to pass to load_image.
-    
-    Returns
-    -------
-    torch.Tensor
-        The loaded image tensor.
-    """
-    # Default cache directory is 'data' in the benchmark root
-    if cache_dir is None:
-        benchmark_root = Path(__file__).parent.parent
-        cache_dir = benchmark_root / "data"
-    else:
-        cache_dir = Path(cache_dir)
-    
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cached_file = cache_dir / name
-    
-    # Download if not cached
-    if not cached_file.exists():
-        print(f"Downloading {name} to {cache_dir}...")
-        download_example(name, cache_dir)
-        print(f"Downloaded {name} successfully.")
-    else:
-        print(f"Using cached {name} from {cache_dir}")
-    
-    # Load from local file
-    # For .pt files, we need to use torch.load
-    if name.endswith('.pt'):
-        device = kwargs.get('device', 'cpu')
-        return torch.load(cached_file, weights_only=True, map_location=device)
-    else:
-        # For image files, use load_image
-        return load_image(str(cached_file), **kwargs)
-
-
-def save_debug_figure(ground_truth, measurement, output_dir="debug_output"):
-    """Save a figure showing ground truth and all measurements.
-    
-    Parameters
-    ----------
-    ground_truth : torch.Tensor
-        Ground truth image tensor of shape (C, H, W).
-    measurement : TensorList or list of torch.Tensor
-        List of measurement tensors, each of shape (C, H, W).
-    output_dir : str or Path
-        Directory to save the debug figure.
-    """
-    # Create output directory
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Convert tensors to numpy for visualization
-    def tensor_to_numpy(tensor):
-        """Convert tensor to numpy array suitable for imshow."""
-        # Move to CPU and detach
-        img = tensor.detach().cpu()
-        # Remove batch dimension if present (B, C, H, W) -> (C, H, W)
-        if img.ndim == 4:
-            img = img.squeeze(0)
-        # If shape is (C, H, W), transpose to (H, W, C)
-        if img.ndim == 3 and img.shape[0] in [1, 3]:
-            img = img.permute(1, 2, 0)
-        # Remove channel dim if grayscale
-        if img.shape[-1] == 1:
-            img = img.squeeze(-1)
-        # Clip to [0, 1] range
-        img = torch.clamp(img, 0, 1)
-        return img.numpy()
-    
-    # Calculate grid size
-    num_measurements = len(measurement)
-    total_images = num_measurements + 1  # +1 for ground truth
-    
-    # Create a grid layout
-    cols = min(4, total_images)  # Max 4 columns
-    rows = (total_images + cols - 1) // cols  # Ceiling division
-    
-    # Create figure
-    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
-    
-    # Handle single subplot case
-    if total_images == 1:
-        axes = [[axes]]
-    elif rows == 1:
-        axes = [axes]
-    elif cols == 1:
-        axes = [[ax] for ax in axes]
-    
-    # Flatten axes for easier iteration
-    axes_flat = [ax for row in axes for ax in row]
-    
-    # Plot ground truth
-    gt_img = tensor_to_numpy(ground_truth)
-    axes_flat[0].imshow(gt_img, cmap='gray' if gt_img.ndim == 2 else None)
-    axes_flat[0].set_title('Ground Truth', fontsize=12, fontweight='bold')
-    axes_flat[0].axis('off')
-    
-    # Plot measurements
-    for i, meas in enumerate(measurement):
-        meas_img = tensor_to_numpy(meas)
-        axes_flat[i + 1].imshow(meas_img, cmap='gray' if meas_img.ndim == 2 else None)
-        axes_flat[i + 1].set_title(f'Measurement {i + 1}', fontsize=12)
-        axes_flat[i + 1].axis('off')
-    
-    # Hide unused subplots
-    for i in range(total_images, len(axes_flat)):
-        axes_flat[i].axis('off')
-    
-    # Adjust layout and save
-    plt.tight_layout()
-    output_file = output_path / 'measurements_debug.png'
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    
-    print(f"Debug figure saved to {output_file}")
+from benchopt import config
+from benchmark_utils import load_cached_example, save_measurements_figure
 
 
 class Dataset(BaseDataset):
@@ -169,13 +42,16 @@ class Dataset(BaseDataset):
         # Setup device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        data_path = config.get_data_path(key="highres_color_image")
+
         # Load example image in original size
         img = load_cached_example(
-            "CBSD_0010.png", 
+            "CBSD_0010.png",
+            cache_dir=data_path, 
             grayscale=False, 
             device=device
         )
-        
+
         # Resize image so that max dimension equals self.image_size
         _, _, h, w = img.shape
         max_dim = max(h, w)
@@ -205,11 +81,11 @@ class Dataset(BaseDataset):
         
         # Calculate equiangular directions based on num_operators
         # Angles are evenly distributed over 180 degrees (since blur is symmetric)
-        angle_step = 180.0 / self.num_operators if self.num_operators > 1 else 0.0
+        angles = np.linspace(0, 180, self.num_operators)
 
         for i in range(self.num_operators):
             # Calculate angle for this operator (equiangular spacing)
-            angle = i * angle_step
+            angle = angles[i]
             
             # Create anisotropic blur kernel with specific angle
             kernel = gaussian_blur(
@@ -238,7 +114,7 @@ class Dataset(BaseDataset):
             measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
 
         # Save debug visualization
-        save_debug_figure(ground_truth, measurement)
+        save_measurements_figure(ground_truth, measurement)
 
         return dict(
             ground_truth=ground_truth,

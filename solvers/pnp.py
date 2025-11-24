@@ -7,6 +7,7 @@ from deepinv.optim.prior import PnP
 from deepinv.models import DRUNet
 from deepinv.distrib import DistributedContext, distribute
 from deepinv.physics import Physics
+from deepinv.utils.tensorlist import TensorList
 
 from benchopt import BaseSolver
 
@@ -14,7 +15,6 @@ from benchopt import BaseSolver
 def compute_step_size_from_operator(
     operator: Physics,
     ground_truth: torch.Tensor,
-    ctx: Optional[DistributedContext] = None,
 ) -> float:
     """
     Compute step size from Lipschitz constant of operator.
@@ -43,7 +43,6 @@ def initialize_reconstruction(
     measurements,
     device: torch.device,
     method: str = 'pseudo_inverse',
-    ctx: Optional[DistributedContext] = None,
 ) -> torch.Tensor:
     """
     Initialize reconstruction signal.
@@ -60,7 +59,6 @@ def initialize_reconstruction(
         measurements: Measurements (TensorList for stacked physics)
         device: Device to create tensor on
         method: Initialization method ('zeros' or 'pseudo_inverse')
-        ctx: Optional distributed context for synchronization
         
     Returns:
         Initialized reconstruction tensor
@@ -88,17 +86,17 @@ class Solver(BaseSolver):
     # Solver parameters
     parameters = {
         'denoiser': ['drunet'],
-        'step_size': ["auto"],
+        'step_size': [None],
         'step_size_scale': [0.9],
         'denoiser_sigma': [0.05],
         'distribute_physics': [False],
         'distribute_denoiser': [False],
         'patch_size': [128],
         'receptive_field_size': [32],
-        'max_batch_size': [8],
+        'max_batch_size': [0],
         'init_method': ['pseudo_inverse'],
         'slurm_nodes': [1],
-        'slurm_tasks_per_node': [1],
+        'slurm_ntasks_per_node': [1],
         'slurm_gres': ["gpu:1"],
         'torchrun_nproc_per_node': [1],
         'name_prefix': ['pnp'],
@@ -119,32 +117,26 @@ class Solver(BaseSolver):
         self.num_operators = num_operators
         self.clip_range = (min_pixel, max_pixel)
 
-        # Detect distributed mode
-        # First check if we're in a torch distributed environment (torchrun)
-        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
-        
-        # If not in torch distributed, check for submitit/slurm
-        if self.world_size == 1:
-            try:
-                import submitit.helpers
-                dist_env = submitit.helpers.TorchDistributedEnvironment().export()
-                self.world_size = int(os.environ.get("WORLD_SIZE", 1))
-            except:
-                self.world_size = 1
+        self.world_size = 1
+        self.ctx = None
 
-        print("World size detected:", self.world_size)
+        try:
+            import submitit
+            submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+            self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        except (ImportError, RuntimeError):
+            pass
 
         self.distributed_mode = self.world_size > 1
         self.reconstruction = torch.zeros(self.ground_truth_shape)
-        self.iteration = 0
         
         # Generate name based on whether using slurm or torchrun
         if hasattr(self, 'slurm_tasks_per_node') and self.slurm_tasks_per_node > 1:
-            self.name = self.name_prefix + str(datetime.now().strftime("_%Y%m%d_%H%M%S_")) + f"{self.slurm_nodes}n{self.slurm_tasks_per_node}t"
+            self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + f"{self.slurm_nodes}n{self.slurm_tasks_per_node}t"
         elif hasattr(self, 'torchrun_nproc_per_node') and self.torchrun_nproc_per_node > 1:
-            self.name = self.name_prefix + str(datetime.now().strftime("_%Y%m%d_%H%M%S_")) + f"torchrun_{self.torchrun_nproc_per_node}proc"
+            self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + f"torchrun_{self.torchrun_nproc_per_node}proc"
         else:
-            self.name = self.name_prefix + str(datetime.now().strftime("_%Y%m%d_%H%M%S_")) + "_single"
+            self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + "_single"
     
     def run(self, cb):
         """Run the PnP algorithm with callback for iteration control.
@@ -154,6 +146,7 @@ class Solver(BaseSolver):
         """
         if self.distributed_mode:
             with DistributedContext(seed=42) as ctx:
+                self.ctx = ctx
                 self._run_with_context(cb, ctx)
         else:
             self._run_with_context(cb, ctx=None)
@@ -168,12 +161,11 @@ class Solver(BaseSolver):
         Returns:
             Tuple of (prior, data_fidelity)
         """
-        # Load denoiser
         if self.denoiser == 'drunet':
             denoiser = DRUNet(pretrained="download").to(device)
         else:
             raise ValueError(f"Unknown denoiser: {self.denoiser}")
-        
+                
         # Distribute denoiser if context provided and requested
         if ctx is not None and self.distribute_denoiser:
             denoiser = distribute(
@@ -191,13 +183,12 @@ class Solver(BaseSolver):
         
         return prior, data_fidelity
     
-    def _compute_step_size(self, physics, device, ctx=None):
+    def _compute_step_size(self, physics, device):
         """Compute step size from physics operator.
         
         Args:
             physics: Physics operator (can be stacked or distributed)
             device: Device to use
-            ctx: Optional distributed context
             
         Returns:
             Step size value
@@ -212,14 +203,13 @@ class Solver(BaseSolver):
         raw_step_size = compute_step_size_from_operator(
             physics,
             ground_truth_example,
-            ctx=ctx
         )
 
         step_size = raw_step_size * self.step_size_scale
         
         return step_size
     
-    def _initialize_reconstruction(self, physics, measurements, device, ctx=None):
+    def _initialize_reconstruction(self, physics, measurements, device):
         """Initialize reconstruction signal.
         
         Args:
@@ -238,10 +228,9 @@ class Solver(BaseSolver):
                 measurements=measurements,
                 device=device,
                 method=self.init_method,
-                ctx=ctx,
             )
     
-    def _run_pnp_iterations(self, prior, data_fidelity, physics, measurements, step_size, cb, device, ctx=None):
+    def _run_pnp_iterations(self, prior, data_fidelity, physics, measurements, step_size, cb):
         """Run PnP iterations.
         
         Args:
@@ -264,26 +253,20 @@ class Solver(BaseSolver):
                 grad = data_fidelity.grad(self.reconstruction, measurements, physics)
 
                 # Gradient descent step
-                x_before_denoising = self.reconstruction - step_size * grad
+                self.reconstruction = self.reconstruction - step_size * grad
 
-                # Denoising step (proximal operator of prior)
-                x_after_denoising = prior.prox(x_before_denoising, sigma_denoiser=self.denoiser_sigma)
-                
+                # Denoising step
+                self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+
                 # Clip reconstruction to valid range after denoising
                 if self.clip_range is not None:
-                    self.reconstruction = torch.clamp(x_after_denoising, self.clip_range[0], self.clip_range[1])
-                else:
-                    self.reconstruction = x_after_denoising
+                    self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
 
                 # Synchronize all CUDA operations and distributed processes
                 # This ensures accurate timing measurements
-                if device.type == 'cuda':
-                    torch.cuda.synchronize(device)
-                if ctx is not None:
-                    ctx.barrier()
-                
-                self.iteration += 1
-    
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize(self.device)
+
     def _run_with_context(self, cb, ctx=None):
         """Run PnP with optional distributed context.
         
@@ -293,56 +276,60 @@ class Solver(BaseSolver):
             cb: Callback function
             ctx: Optional distributed context (None for single-process)
         """
+        
         # Determine device
         if ctx is not None:
-            device = ctx.device
+            self.device = ctx.device
         else:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        print("Using device:", device)
-        print("Distributed mode:", ctx is not None)
-        
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Move measurement to correct device
+        if hasattr(self.measurement, 'to'):
+            measurement = self.measurement.to(self.device)
+        elif isinstance(self.measurement, list):
+            measurement = TensorList([m.to(self.device) for m in self.measurement])
+        else:
+            measurement = self.measurement
+
         # Distribute physics if in distributed mode and requested
         if ctx is not None and self.distribute_physics:
             physics = distribute(self.physics, ctx)
         else:
             physics = self.physics
-        
-        print("Physics initialized.")
+            if hasattr(physics, 'to'):
+                physics = physics.to(self.device)
         
         # Setup components
-        prior, data_fidelity = self._setup_components(device, ctx)
-
-        print("Components set up.")
-
+        prior, data_fidelity = self._setup_components(self.device, ctx)
         cb()
+        print("Components set up.")
         
         # Compute step size
-        step_size = self._compute_step_size(physics, device, ctx)
-
-        print("Step size computed:", step_size)
+        step_size = self._compute_step_size(physics, self.device)
         cb()
+        print("Step size computed:", step_size)
 
         # Initialize reconstruction
-        self.reconstruction = self._initialize_reconstruction(physics, self.measurement, device, ctx)
-
+        self.reconstruction = self._initialize_reconstruction(physics, self.measurement, self.device)
+        cb()
         print("Reconstruction initialized.")
         
         # Clip initial reconstruction if requested
         if self.clip_range is not None:
             self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
-        
-        # Synchronize CUDA and distributed processes before starting iterations
-        if device.type == 'cuda':
-            torch.cuda.synchronize(device)
+
+        print("Starting PnP iterations.")
+
+        # Run PnP iterations
+        self._run_pnp_iterations(prior, data_fidelity, physics, measurement, step_size, cb)
+
+        # Synchronize at the end of the run to ensure benchopt captures the full execution time
+        # This must be done BEFORE the context manager exits
+        if self.device.type == 'cuda':
+            torch.cuda.synchronize(self.device)
         if ctx is not None:
             ctx.barrier()
 
-        print("Starting PnP iterations.")
-        
-        # Run PnP iterations
-        self._run_pnp_iterations(prior, data_fidelity, physics, self.measurement, step_size, cb, device, ctx)
-    
     def get_result(self):
         """Return the reconstruction result.
         
