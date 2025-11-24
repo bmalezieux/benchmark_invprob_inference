@@ -114,7 +114,7 @@ class Dataset(BaseDataset):
             measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
 
         # Save debug visualization
-        save_measurements_figure(ground_truth, measurement)
+        save_measurements_figure(ground_truth, measurement, filename="highres_color_image_measurements.png")
 
         return dict(
             ground_truth=ground_truth,
