@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 import matplotlib.pyplot as plt
 from deepinv.utils.demo import download_example, load_image
+from deepinv.models import DRUNet
 
 
 def tensor_to_numpy(tensor):
@@ -189,3 +190,63 @@ def load_cached_example(name, cache_dir=None, **kwargs):
         return torch.load(cached_file, weights_only=True, map_location=device)
     else:
         return load_image(str(cached_file), **kwargs)
+
+
+def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=torch.float32):
+    """Create a DRUNet denoiser appropriate for the given ground truth shape.
+    
+    Automatically detects whether to use:
+    - Grayscale (1 channel) or color (3 channels) based on channel dimension
+    - 2D or 3D based on number of spatial dimensions
+    
+    Parameters
+    ----------
+    ground_truth_shape : tuple
+        Shape of the ground truth tensor.
+        For 2D: (B, C, H, W)
+        For 3D: (B, C, D, H, W)
+    device : str or torch.device, optional
+        Device to load the model on. Default: 'cpu'.
+    dtype : torch.dtype, optional
+        Data type for the model. Default: torch.float32.
+        
+    Returns
+    -------
+    DRUNet
+        Configured DRUNet denoiser model.
+    """
+    # Determine dimensionality
+    ndim = len(ground_truth_shape)
+    if ndim == 4:
+        # 2D case: (B, C, H, W)
+        is_3d = False
+        num_channels = ground_truth_shape[1]
+    elif ndim == 5:
+        # 3D case: (B, C, D, H, W)
+        is_3d = True
+        num_channels = ground_truth_shape[1]
+    else:
+        raise ValueError(f"Unsupported ground truth shape: {ground_truth_shape}. Expected 4D (B,C,H,W) or 5D (B,C,D,H,W).")
+    
+    # Determine if grayscale or color
+    if num_channels == 1:
+        # Grayscale: use single-channel DRUNet
+        print(f"Creating grayscale DRUNet (1 channel, {'3D' if is_3d else '2D'})")
+        model = DRUNet(in_channels=1, out_channels=1, pretrained="download")
+    elif num_channels == 3:
+        # Color: use default RGB DRUNet
+        print(f"Creating color DRUNet (3 channels, {'3D' if is_3d else '2D'})")
+        model = DRUNet(pretrained="download")
+    else:
+        raise ValueError(f"Unsupported number of channels: {num_channels}. Expected 1 (grayscale) or 3 (color).")
+    
+    # Move to device and dtype
+    model = model.to(dtype).to(device)
+    
+    # Transform to 3D if needed
+    if is_3d:
+        print(f"Note: 3D transformation for DRUNet not yet implemented in benchmark_utils.")
+        print(f"      For 3D support, you'll need to apply transform_2d_to_3d manually.")
+    
+    return model
+

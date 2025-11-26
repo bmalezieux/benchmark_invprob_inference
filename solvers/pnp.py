@@ -6,10 +6,11 @@ from deepinv.optim.data_fidelity import L2
 from deepinv.optim.prior import PnP
 from deepinv.models import DRUNet
 from deepinv.distrib import DistributedContext, distribute
-from deepinv.physics import Physics
+from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
 
 from benchopt import BaseSolver
+from benchmark_utils import create_drunet_denoiser
 
 
 def compute_step_size_from_operator(
@@ -107,7 +108,7 @@ class Solver(BaseSolver):
         
         Args:
             measurement: Noisy measurements (TensorList or tensor)
-            physics: Forward operator (stacked physics or list)
+            physics: Forward operator (stacked physics or list or callable)
             ground_truth_shape: Shape of the ground truth tensor
             num_operators: Number of operators in the physics
         """
@@ -162,7 +163,12 @@ class Solver(BaseSolver):
             Tuple of (prior, data_fidelity)
         """
         if self.denoiser == 'drunet':
-            denoiser = DRUNet(pretrained="download").to(device)
+            # Use the utility function to create appropriate DRUNet
+            denoiser = create_drunet_denoiser(
+                ground_truth_shape=self.ground_truth_shape,
+                device=device,
+                dtype=torch.float32
+            )
         else:
             raise ValueError(f"Unknown denoiser: {self.denoiser}")
                 
@@ -291,10 +297,24 @@ class Solver(BaseSolver):
         else:
             measurement = self.measurement
 
-        # Distribute physics if in distributed mode and requested
+        # Handle physics: can be stacked physics, factory function, or list
         if ctx is not None and self.distribute_physics:
-            physics = distribute(self.physics, ctx)
+            # In distributed mode with distribute_physics=True
+            physics = distribute(
+                self.physics, 
+                ctx, 
+                num_operators=self.num_operators,
+                type_object='physics'
+            )
+        elif callable(self.physics) and not isinstance(self.physics, Physics):
+            # Factory function in single-process mode: instantiate all operators and stack them
+            physics_list = []
+            for i in range(self.num_operators):
+                op = self.physics(i, self.device, None)
+                physics_list.append(op)
+            physics = stack(*physics_list)
         else:
+            # Already a stacked physics or single physics operator
             physics = self.physics
             if hasattr(physics, 'to'):
                 physics = physics.to(self.device)
