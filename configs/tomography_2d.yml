@@ -5,7 +5,7 @@
 objective:
   - reconstruction_objective
 
-# Dataset filters (with parameters) - small size for faster testing
+# Dataset filters (with parameters)
 dataset:
   - tomography_2d:
       img_size: 1024
@@ -13,7 +13,7 @@ dataset:
       num_angles: 100
       noise_level: 0.01
 
-# Solver filters (with parameters) - single process version
+# Solver filters (with parameters)
 solver:
   - PnP:
       denoiser: drunet

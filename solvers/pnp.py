@@ -121,12 +121,28 @@ class Solver(BaseSolver):
         self.world_size = 1
         self.ctx = None
 
-        try:
-            import submitit
-            submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+        # Check if distributed environment is already set up
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            # Already initialized by dataset or previous call
             self.world_size = int(os.environ.get("WORLD_SIZE", 1))
-        except (ImportError, RuntimeError):
-            pass
+            print(f"Distributed environment already initialized: world_size={self.world_size}")
+        else:
+            # Try to initialize
+            try:
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+                print(f"Initialized distributed environment via submitit: world_size={self.world_size}")
+            except ImportError:
+                print("submitit not installed, running in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit (possibly already called): {e}")
+                print("Running in non-distributed mode")
 
         self.distributed_mode = self.world_size > 1
         self.reconstruction = torch.zeros(self.ground_truth_shape)
@@ -146,7 +162,9 @@ class Solver(BaseSolver):
             cb: Callback function to call at each iteration. Returns False when to stop.
         """
         if self.distributed_mode:
-            with DistributedContext(seed=42) as ctx:
+            # Use cleanup=True to properly destroy process group when done
+            # This will reuse the process group created by dataset (if any)
+            with DistributedContext(seed=42, cleanup=True) as ctx:
                 self.ctx = ctx
                 self._run_with_context(cb, ctx)
         else:
@@ -304,7 +322,7 @@ class Solver(BaseSolver):
                 self.physics, 
                 ctx, 
                 num_operators=self.num_operators,
-                type_object='physics'
+                type_object='linear_physics'
             )
         elif callable(self.physics) and not isinstance(self.physics, Physics):
             # Factory function in single-process mode: instantiate all operators and stack them

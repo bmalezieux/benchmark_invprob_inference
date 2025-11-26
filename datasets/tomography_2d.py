@@ -3,6 +3,7 @@
 This dataset uses the Shepp-Logan phantom and creates multiple tomography
 operators with different angle ranges for distributed reconstruction.
 """
+import os
 import torch
 import numpy as np
 from pathlib import Path
@@ -14,6 +15,7 @@ from torchvision import transforms
 
 from deepinv.physics import Tomography, GaussianNoise
 from deepinv.utils.demo import get_image_url
+from deepinv.distrib import DistributedContext
 
 from benchopt import BaseDataset
 from benchopt import config
@@ -185,112 +187,138 @@ class Dataset(BaseDataset):
         Creates tomography operators factory and measurements.
         Returns dictionary with keys expected by Objective.set_data().
         """
-        # Setup device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Setup caching
-        data_path = config.get_data_path(key="tomography_2d")
-        cache_dir = Path(data_path)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Load Shepp-Logan phantom (caches original image, resizes as needed)
-        ground_truth = load_shepp_logan_image(
-            img_size=self.img_size,
-            grayscale=True,
-            device=str(device),
-            cache_dir=cache_dir
-        )
-        
-        print(f"Loaded Shepp-Logan phantom: {ground_truth.shape}")
-        
-        # Create angle ranges for each operator
-        # For parallel beam, angles typically go from 0 to 180 degrees
-        angles_total = torch.linspace(
-            0, 180, self.num_angles + 1, 
-            dtype=torch.float32, device=device
-        )[:-1]
-        
-        # Split angles among operators
-        angles_per_operator = self.num_angles // self.num_operators
-        angles_list = []
-        
-        for i in range(self.num_operators):
-            start_idx = i * angles_per_operator
-            if i == self.num_operators - 1:
-                # Last operator gets any remaining angles
-                end_idx = self.num_angles
-            else:
-                end_idx = (i + 1) * angles_per_operator
+
+        # Check if distributed environment is already set up
+        if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+            # Try to initialize
+            try:
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                print("Initialized distributed environment via submitit in dataset")
+            except ImportError:
+                print("submitit not installed, dataset will run in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available in dataset: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit in dataset: {e}")
+        else:
+            print(f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}")
+
+        # Use cleanup=False to keep process group alive for solver
+        # Solver will handle cleanup when it's done
+        with DistributedContext(seed=42, cleanup=False) as ctx:
+            print(f"DistributedContext: rank {ctx.rank} / {ctx.world_size}")
+
+            # Setup device
+            device = ctx.device
             
-            # Extract angle subset
-            angles_subset = angles_total[start_idx:end_idx]
-            angles_list.append(angles_subset)
-        
-        print(f"Split {self.num_angles} angles into {self.num_operators} operators")
-        
-        # Create full operator on GPU to generate measurements
-        # We need all angles to generate realistic measurements
-        full_angles = angles_total
-        rng_full = torch.Generator(device=device).manual_seed(self.seed)
-        noise_model_full = GaussianNoise(sigma=self.noise_level, rng=rng_full)
-        
-        full_physics = Tomography(
-            img_width=self.img_size,
-            angles=full_angles,
-            circle=self.circle,
-            device=device,
-            noise_model=noise_model_full,
-            normalize=False
-        )
-        
-        # Generate full measurements
-        with torch.no_grad():
-            full_measurement = full_physics(ground_truth)
-        
-        print(f"Generated full measurement: {full_measurement.shape}")
-        
-        # Split measurements according to angle division
-        # Each measurement subset corresponds to an operator's angle range
-        # Full measurement shape is (B, C, detector_width, num_angles) = (1, 1, 128, 90)
-        # We need to split along the last dimension (angles)
-        measurement_list = []
-        
-        for i in range(self.num_operators):
-            start_idx = i * angles_per_operator
-            if i == self.num_operators - 1:
-                end_idx = self.num_angles
-            else:
-                end_idx = (i + 1) * angles_per_operator
+            # Setup caching
+            data_path = config.get_data_path(key="tomography_2d")
+            cache_dir = Path(data_path)
+            cache_dir.mkdir(parents=True, exist_ok=True)
             
-            # Extract measurement subset along the angle dimension (dimension 3)
-            meas_subset = full_measurement[:, :, :, start_idx:end_idx]
-            measurement_list.append(meas_subset)
-            print(f"Measurement {i}: shape {meas_subset.shape}, angles [{start_idx}:{end_idx}]")
-        
-        # Ensure data is on correct device
-        ground_truth = ground_truth.to(device)
-        measurement_list = [m.to(device) for m in measurement_list]
-        
-        # Create factory function for operators
-        physics_factory = self._create_operator_factory(
-            device=str(device),
-            angles_list=angles_list,
-            noise_sigma=self.noise_level
-        )
-        
-        # Save debug visualization (show sinograms)
-        save_measurements_figure(
-            ground_truth, 
-            measurement_list,
-            filename="tomography_2d_measurements.png"
-        )
-        
+            # Load Shepp-Logan phantom (caches original image, resizes as needed)
+            ground_truth = load_shepp_logan_image(
+                img_size=self.img_size,
+                grayscale=True,
+                device=str(device),
+                cache_dir=cache_dir
+            )
+            
+            print(f"Loaded Shepp-Logan phantom: {ground_truth.shape}")
+            
+            # Create angle ranges for each operator
+            # For parallel beam, angles typically go from 0 to 180 degrees
+            angles_total = torch.linspace(
+                0, 180, self.num_angles + 1, 
+                dtype=torch.float32, device=device
+            )[:-1]
+            
+            # Split angles among operators
+            angles_per_operator = self.num_angles // self.num_operators
+            angles_list = []
+            
+            for i in range(self.num_operators):
+                start_idx = i * angles_per_operator
+                if i == self.num_operators - 1:
+                    # Last operator gets any remaining angles
+                    end_idx = self.num_angles
+                else:
+                    end_idx = (i + 1) * angles_per_operator
+                
+                # Extract angle subset
+                angles_subset = angles_total[start_idx:end_idx]
+                angles_list.append(angles_subset)
+            
+            print(f"Split {self.num_angles} angles into {self.num_operators} operators")
+            
+            # Create full operator on GPU to generate measurements
+            # We need all angles to generate realistic measurements
+            full_angles = angles_total
+            rng_full = torch.Generator(device=device).manual_seed(self.seed)
+            noise_model_full = GaussianNoise(sigma=self.noise_level, rng=rng_full)
+            
+            full_physics = Tomography(
+                img_width=self.img_size,
+                angles=full_angles,
+                circle=self.circle,
+                device=device,
+                noise_model=noise_model_full,
+                normalize=False
+            )
+            
+            # Generate full measurements
+            with torch.no_grad():
+                full_measurement = full_physics(ground_truth)
+            
+            print(f"Generated full measurement: {full_measurement.shape}")
+            
+            # Split measurements according to angle division
+            # Each measurement subset corresponds to an operator's angle range
+            # Full measurement shape is (B, C, detector_width, num_angles) = (1, 1, 128, 90)
+            # We need to split along the last dimension (angles)
+            measurement_list = []
+            
+            for i in range(self.num_operators):
+                start_idx = i * angles_per_operator
+                if i == self.num_operators - 1:
+                    end_idx = self.num_angles
+                else:
+                    end_idx = (i + 1) * angles_per_operator
+                
+                # Extract measurement subset along the angle dimension (dimension 3)
+                meas_subset = full_measurement[:, :, :, start_idx:end_idx]
+                measurement_list.append(meas_subset)
+                print(f"Measurement {i}: shape {meas_subset.shape}, angles [{start_idx}:{end_idx}]")
+            
+            # Ensure data is on correct device
+            ground_truth = ground_truth.to(device)
+            measurement_list = [m.to(device) for m in measurement_list]
+            
+            # Create factory function for operators
+            physics_factory = self._create_operator_factory(
+                device=str(device),
+                angles_list=angles_list,
+                noise_sigma=self.noise_level
+            )
+
+            if ctx.rank == 0:
+                # Save debug visualization (show sinograms)
+                save_measurements_figure(
+                    ground_truth, 
+                    measurement_list,
+                    filename="tomography_2d_measurements.png"
+                )
+
         return dict(
             ground_truth=ground_truth,
             measurement=measurement_list,
             physics=physics_factory,
-            min_pixel=0.0,
-            max_pixel=1.0,
+            min_pixel=ground_truth.min().item(),
+            max_pixel=ground_truth.max().item(),
             ground_truth_shape=ground_truth.shape,
             num_operators=self.num_operators,
         )
