@@ -26,7 +26,7 @@ solver:
 
 
 # Run parameters
-max-runs: 3
+max-runs: 10
 n-repetitions: 1
 plot: true
 html: true

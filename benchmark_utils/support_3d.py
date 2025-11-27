@@ -1,5 +1,7 @@
 import torch
 from torch import nn
+from deepinv.models.utils import test_pad
+import types
 
 
 def count_parameters(model) -> int:
@@ -72,3 +74,40 @@ def transform_2d_to_3d(model):
             setattr(model, name, conv3d)
         else:
             transform_2d_to_3d(module)
+
+
+def forward_3d(self, x, sigma):
+    if isinstance(sigma, torch.Tensor):
+        if sigma.ndim > 0:
+            noise_level_map = sigma.view(x.size(0), 1, 1, 1, 1)
+            noise_level_map = noise_level_map.expand(-1, 1, x.size(2), x.size(3), x.size(4))
+        else:
+            noise_level_map = torch.ones(
+                (x.size(0), 1, x.size(2), x.size(3), x.size(4)), device=x.device
+            ) * sigma[None, None, None, None, None].to(x.device)
+    else:
+        noise_shape = list(x.shape)
+        noise_shape[1] = 1
+        noise_level_map = torch.ones(noise_shape, device=x.device) * sigma
+    
+    x = torch.cat((x, noise_level_map), 1)
+    
+    # Check if dimensions are divisible by 8 (3 levels of downsampling)
+    if (
+        x.size(2) % 8 == 0
+        and x.size(3) % 8 == 0
+        and x.size(4) % 8 == 0
+        and x.size(2) > 31
+        and x.size(3) > 31
+        and x.size(4) > 31
+    ):
+        x = self.forward_unet(x)
+    else:
+        # Use test_pad which handles 5D inputs correctly
+        x = test_pad(self.forward_unet, x, modulo=16)
+    
+    return x
+
+
+def patch_drunet_3d(model):
+    model.forward = types.MethodType(forward_3d, model)

@@ -16,7 +16,7 @@ def tensor_to_numpy(tensor):
     Parameters
     ----------
     tensor : torch.Tensor
-        Input tensor of shape (B, C, H, W), (C, H, W), or (H, W).
+        Input tensor of shape (B, C, D, H, W), (B, C, H, W), (C, H, W), or (H, W).
         
     Returns
     -------
@@ -24,6 +24,11 @@ def tensor_to_numpy(tensor):
         Numpy array suitable for matplotlib imshow, with values in [0, 1].
     """
     img = tensor.detach().cpu()
+
+    # Handle 5D tensor (B, C, D, H, W) -> take middle slice
+    if img.ndim == 5:
+        mid_slice = img.shape[2] // 2
+        img = img[:, :, mid_slice, :, :]
     
     # Remove batch dimension if present
     if img.ndim == 4:
@@ -215,6 +220,8 @@ def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=torch.float32
     DRUNet
         Configured DRUNet denoiser model.
     """
+    from .support_3d import transform_2d_to_3d, patch_drunet_3d
+    
     # Determine dimensionality
     ndim = len(ground_truth_shape)
     if ndim == 4:
@@ -240,13 +247,14 @@ def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=torch.float32
     else:
         raise ValueError(f"Unsupported number of channels: {num_channels}. Expected 1 (grayscale) or 3 (color).")
     
-    # Move to device and dtype
-    model = model.to(dtype).to(device)
-    
     # Transform to 3D if needed
     if is_3d:
-        print(f"Note: 3D transformation for DRUNet not yet implemented in benchmark_utils.")
-        print(f"      For 3D support, you'll need to apply transform_2d_to_3d manually.")
+        print(f"Transforming 2D DRUNet to 3D using transform_2d_to_3d")
+        transform_2d_to_3d(model)
+        patch_drunet_3d(model)
+
+    # Move to device and dtype
+    model = model.to(dtype).to(device)
     
     return model
 
