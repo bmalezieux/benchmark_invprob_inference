@@ -3,6 +3,7 @@
 This dataset uses 3D CT data from HuggingFace (Walnut cone-beam CT) and creates
 multiple tomography operators with ASTRA for distributed reconstruction.
 """
+import os
 import torch
 import numpy as np
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Optional, Dict
 
 from deepinv.physics import TomographyWithAstra
 from deepinv.utils.demo import load_torch_url
+from deepinv.distrib import DistributedContext
 
 from benchopt import BaseDataset
 from benchopt import config
@@ -27,7 +29,7 @@ class Dataset(BaseDataset):
         'seed': [42],
     }
 
-    def __init__(self, num_operators=2, num_projections=600, 
+    def __init__(self, num_operators=2, num_projections=100, 
                  geometry_type='conebeam',
                  use_dataset_sinogram=True, seed=42):
         """Initialize the dataset.
@@ -264,88 +266,112 @@ class Dataset(BaseDataset):
         Creates 3D tomography operators factory and measurements.
         Returns dictionary with keys expected by Objective.set_data().
         """
-        # Setup device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Get data directory
-        data_path = config.get_data_path(key="tomography_3d")
-        
-        # Setup caching
-        cache_dir = Path(data_path)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create cache filename based on parameters
-        cache_file = cache_dir / f"walnut_{self.num_operators}ops_{self.num_projections}proj_{self.geometry_type}_seed{self.seed}.pt"
-        
-        # Try to load from cache
-        if cache_file.exists():
-            print(f"Loading cached 3D data from {cache_file}")
-            cached_data = torch.load(cache_file, map_location=device)
-            ground_truth = cached_data['ground_truth']
-            measurement_list = cached_data['measurements']
-            img_shape = ground_truth.shape[-3:]  # (D, H, W)
-            print(f"Loaded cached 3D ground truth with shape: {ground_truth.shape}")
-            print(f"Image shape (D, H, W): {img_shape}")
-            
-            # Still need to load dataset for trajectory (needed by factory)
-            dataset = self._load_or_download_dataset(
-                data_dir=Path(data_path),
-                filename="Walnut-CBCT_8.pt"
-            )
+        # Check if distributed environment is already set up
+        if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+            # Try to initialize
+            try:
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                print("Initialized distributed environment via submitit in dataset")
+            except ImportError:
+                print("submitit not installed, dataset will run in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available in dataset: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit in dataset: {e}")
         else:
-            print(f"Cache not found, generating new 3D data...")
-            # Load dataset
-            dataset = self._load_or_download_dataset(
-                data_dir=Path(data_path),
-                filename="Walnut-CBCT_8.pt"
-            )
+            print(f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}")
+
+        # Use cleanup=False to keep process group alive for solver
+        # Solver will handle cleanup when it's done
+        with DistributedContext(seed=42, cleanup=False) as ctx:
+            print(f"DistributedContext: rank {ctx.rank} / {ctx.world_size}")
+
+            # Setup device
+            device = ctx.device
             
-            # Extract ground truth volume
-            ref_rc = dataset["dense_reconstruction"]
-            ground_truth = ref_rc.float().to(device)
+            # Get data directory
+            data_path = config.get_data_path(key="tomography_3d")
             
-            # Add batch and channel dimensions: (D, H, W) -> (1, 1, D, H, W)
-            if ground_truth.dim() == 3:
-                ground_truth = ground_truth.unsqueeze(0).unsqueeze(0)
+            # Setup caching
+            cache_dir = Path(data_path)
+            cache_dir.mkdir(parents=True, exist_ok=True)
             
-            img_shape = ground_truth.shape[-3:]  # (D, H, W)
+            # Create cache filename based on parameters
+            cache_file = cache_dir / f"walnut_{self.num_operators}ops_{self.num_projections}proj_{self.geometry_type}_seed{self.seed}.pt"
             
-            print(f"Loaded 3D ground truth with shape: {ground_truth.shape}")
-            print(f"Image shape (D, H, W): {img_shape}")
-        
-            # Create measurements factory
-            measurements_factory = self._create_measurements_factory(
+            # Try to load from cache
+            if cache_file.exists():
+                print(f"Loading cached 3D data from {cache_file}")
+                cached_data = torch.load(cache_file, map_location=device)
+                ground_truth = cached_data['ground_truth']
+                measurement_list = cached_data['measurements']
+                img_shape = ground_truth.shape[-3:]  # (D, H, W)
+                print(f"Loaded cached 3D ground truth with shape: {ground_truth.shape}")
+                print(f"Image shape (D, H, W): {img_shape}")
+                
+                # Still need to load dataset for trajectory (needed by factory)
+                dataset = self._load_or_download_dataset(
+                    data_dir=Path(data_path),
+                    filename="Walnut-CBCT_8.pt"
+                )
+            else:
+                print(f"Cache not found, generating new 3D data...")
+                # Load dataset
+                dataset = self._load_or_download_dataset(
+                    data_dir=Path(data_path),
+                    filename="Walnut-CBCT_8.pt"
+                )
+                
+                # Extract ground truth volume
+                ref_rc = dataset["dense_reconstruction"]
+                ground_truth = ref_rc.float().to(device)
+                
+                # Add batch and channel dimensions: (D, H, W) -> (1, 1, D, H, W)
+                if ground_truth.dim() == 3:
+                    ground_truth = ground_truth.unsqueeze(0).unsqueeze(0)
+                
+                img_shape = ground_truth.shape[-3:]  # (D, H, W)
+                
+                print(f"Loaded 3D ground truth with shape: {ground_truth.shape}")
+                print(f"Image shape (D, H, W): {img_shape}")
+            
+                # Create measurements factory
+                measurements_factory = self._create_measurements_factory(
+                    dataset=dataset,
+                    device_str=str(device)
+                )
+                
+                # For benchopt, we need to return a list of measurements
+                # Create them by calling the factory for each operator
+                measurement_list = []
+                for i in range(self.num_operators):
+                    meas = measurements_factory(i, device, None)
+                    measurement_list.append(meas)
+                
+                print(f"Created {len(measurement_list)} measurements")
+                
+                # Save to cache
+                print(f"Saving 3D data to cache: {cache_file}")
+                torch.save({
+                    'ground_truth': ground_truth.cpu(),
+                    'measurements': [m.cpu() for m in measurement_list],
+                }, cache_file)
+                print(f"3D data cached successfully")
+            
+            # Ensure data is on correct device
+            ground_truth = ground_truth.to(device)
+            measurement_list = [m.to(device) for m in measurement_list]
+            
+            # Create operator factory (always needed, doesn't use cached data)
+            physics_factory = self._create_operator_factory(
                 dataset=dataset,
+                img_shape=img_shape,
                 device_str=str(device)
             )
-            
-            # For benchopt, we need to return a list of measurements
-            # Create them by calling the factory for each operator
-            measurement_list = []
-            for i in range(self.num_operators):
-                meas = measurements_factory(i, device, None)
-                measurement_list.append(meas)
-            
-            print(f"Created {len(measurement_list)} measurements")
-            
-            # Save to cache
-            print(f"Saving 3D data to cache: {cache_file}")
-            torch.save({
-                'ground_truth': ground_truth.cpu(),
-                'measurements': [m.cpu() for m in measurement_list],
-            }, cache_file)
-            print(f"3D data cached successfully")
-        
-        # Ensure data is on correct device
-        ground_truth = ground_truth.to(device)
-        measurement_list = [m.to(device) for m in measurement_list]
-        
-        # Create operator factory (always needed, doesn't use cached data)
-        physics_factory = self._create_operator_factory(
-            dataset=dataset,
-            img_shape=img_shape,
-            device_str=str(device)
-        )
         
         return dict(
             ground_truth=ground_truth,

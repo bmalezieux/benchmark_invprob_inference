@@ -3,12 +3,14 @@
 This dataset uses a real color image from the CBSD dataset and applies
 multiple anisotropic Gaussian blur operators with equiangular orientations.
 """
+import os
 import torch
 import torch.nn.functional as F
 import numpy as np
 
 from deepinv.physics import GaussianNoise, stack
 from deepinv.physics.blur import Blur, gaussian_blur
+from deepinv.distrib import DistributedContext
 
 from benchopt import BaseDataset
 from benchopt import config
@@ -39,82 +41,107 @@ class Dataset(BaseDataset):
         Creates stacked physics operators and measurements using deepinv examples.
         Returns dictionary with keys expected by Objective.set_data().
         """
-        # Setup device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        data_path = config.get_data_path(key="highres_color_image")
-
-        # Load example image in original size
-        img = load_cached_example(
-            "CBSD_0010.png",
-            cache_dir=data_path, 
-            grayscale=False, 
-            device=device
-        )
-
-        # Resize image so that max dimension equals self.image_size
-        _, _, h, w = img.shape
-        max_dim = max(h, w)
-        
-        if max_dim != self.image_size:
-            scale_factor = self.image_size / max_dim
-            new_h = int(h * scale_factor)
-            new_w = int(w * scale_factor)
-            
-            ground_truth = F.interpolate(
-                img, 
-                size=(new_h, new_w), 
-                mode='bicubic', 
-                align_corners=False
-            )
-            print(f"Resized image from ({h}, {w}) to ({new_h}, {new_w})")
+        # Check if distributed environment is already set up
+        if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+            # Try to initialize
+            try:
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                print("Initialized distributed environment via submitit in dataset")
+            except ImportError:
+                print("submitit not installed, dataset will run in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available in dataset: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit in dataset: {e}")
         else:
-            ground_truth = img
-            print(f"Image already at target size: ({h}, {w})")
+            print(f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}")
 
-        # Create anisotropic Gaussian blur kernels with equiangular directions
-        physics_list = []
+        # Use cleanup=False to keep process group alive for solver
+        # Solver will handle cleanup when it's done
+        with DistributedContext(seed=42, cleanup=False) as ctx:
+            print(f"DistributedContext: rank {ctx.rank} / {ctx.world_size}")
 
-        # Set sigma values based on a fixed blur strength in normalized coordinates
-        sigma_x = self.image_size * 0.02  # 2% of image size
-        sigma_y = self.image_size * 0.01  # 1% of image size (anisotropic)
-        
-        # Calculate equiangular directions based on num_operators
-        # Angles are evenly distributed over 180 degrees (since blur is symmetric)
-        angles = np.linspace(0, 180, self.num_operators)
+            # Setup device
+            device = ctx.device
 
-        for i in range(self.num_operators):
-            # Calculate angle for this operator (equiangular spacing)
-            angle = angles[i]
-            
-            # Create anisotropic blur kernel with specific angle
-            kernel = gaussian_blur(
-                sigma=(sigma_x, sigma_y), 
-                angle=angle, 
-                device=str(device)
+            data_path = config.get_data_path(key="highres_color_image")
+
+            # Load example image in original size
+            img = load_cached_example(
+                "CBSD_0010.png",
+                cache_dir=data_path, 
+                grayscale=False, 
+                device=device
             )
+
+            # Resize image so that max dimension equals self.image_size
+            _, _, h, w = img.shape
+            max_dim = max(h, w)
             
-            # Create blur operator with circular padding
-            blur_op = Blur(filter=kernel, padding="circular", device=str(device))
+            if max_dim != self.image_size:
+                scale_factor = self.image_size / max_dim
+                new_h = int(h * scale_factor)
+                new_w = int(w * scale_factor)
+                
+                ground_truth = F.interpolate(
+                    img, 
+                    size=(new_h, new_w), 
+                    mode='bicubic', 
+                    align_corners=False
+                )
+                print(f"Resized image from ({h}, {w}) to ({new_h}, {new_w})")
+            else:
+                ground_truth = img
+                print(f"Image already at target size: ({h}, {w})")
 
-            # Set the noise model with reproducible random generator
-            rng = torch.Generator(device=device).manual_seed(self.seed + i)
-            blur_op.noise_model = GaussianNoise(sigma=self.noise_level, rng=rng)
-            blur_op = blur_op.to(device)
+            # Create anisotropic Gaussian blur kernels with equiangular directions
+            physics_list = []
 
-            physics_list.append(blur_op)
+            # Set sigma values based on a fixed blur strength in normalized coordinates
+            sigma_x = self.image_size * 0.02  # 2% of image size
+            sigma_y = self.image_size * 0.01  # 1% of image size (anisotropic)
+            
+            # Calculate equiangular directions based on num_operators
+            # Angles are evenly distributed over 180 degrees (since blur is symmetric)
+            angles = np.linspace(0, 180, self.num_operators)
 
-        # Stack physics operators into a single operator
-        stacked_physics = stack(*physics_list)
+            for i in range(self.num_operators):
+                # Calculate angle for this operator (equiangular spacing)
+                angle = angles[i]
+                
+                # Create anisotropic blur kernel with specific angle
+                kernel = gaussian_blur(
+                    sigma=(sigma_x, sigma_y), 
+                    angle=angle, 
+                    device=str(device)
+                )
+                
+                # Create blur operator with circular padding
+                blur_op = Blur(filter=kernel, padding="circular", device=str(device))
 
-        # Generate measurements (returns a TensorList)
-        measurement = stacked_physics(ground_truth)
+                # Set the noise model with reproducible random generator
+                rng = torch.Generator(device=device).manual_seed(self.seed + i)
+                blur_op.noise_model = GaussianNoise(sigma=self.noise_level, rng=rng)
+                blur_op = blur_op.to(device)
 
-        for i in range(len(measurement)):
-            measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
+                physics_list.append(blur_op)
 
-        # Save debug visualization
-        save_measurements_figure(ground_truth, measurement, filename="highres_color_image_measurements.png")
+            # Stack physics operators into a single operator
+            stacked_physics = stack(*physics_list)
+
+            # Generate measurements (returns a TensorList)
+            measurement = stacked_physics(ground_truth)
+
+            for i in range(len(measurement)):
+                measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
+
+            if ctx.rank == 0:
+                # Save debug visualization
+                save_measurements_figure(ground_truth, measurement, filename="highres_color_image_measurements.png")
 
         return dict(
             ground_truth=ground_truth,

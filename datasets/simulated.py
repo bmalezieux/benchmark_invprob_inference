@@ -3,11 +3,13 @@
 This dataset generates a synthetic image and applies multiple blur operators
 for quick testing and validation of reconstruction algorithms.
 """
+import os
 import torch
 import numpy as np
 
 from deepinv.physics import GaussianNoise, stack
 from deepinv.physics.blur import Blur, gaussian_blur
+from deepinv.distrib import DistributedContext
 
 from benchopt import BaseDataset
 from benchmark_utils import save_measurements_figure
@@ -56,58 +58,83 @@ class Dataset(BaseDataset):
             Dictionary with keys: ground_truth, measurement, physics, 
             min_pixel, max_pixel, ground_truth_shape, num_operators.
         """
-        # Setup device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Set random seed for reproducibility
-        torch.manual_seed(self.seed)
-        np.random.seed(self.seed)
-        
-        # Generate synthetic ground truth image (grayscale)
-        ground_truth = self._generate_synthetic_image(device)
-        
-        # Create anisotropic Gaussian blur kernels with equiangular directions
-        physics_list = []
-        
-        # Set sigma values based on a fixed blur strength in normalized coordinates
-        sigma_x = self.image_size * 0.02  # 2% of image size
-        sigma_y = self.image_size * 0.01  # 1% of image size (anisotropic)
-        
-        # Calculate equiangular directions based on num_operators
-        angles = np.linspace(0, 180, self.num_operators)
+        # Check if distributed environment is already set up
+        if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+            # Try to initialize
+            try:
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                print("Initialized distributed environment via submitit in dataset")
+            except ImportError:
+                print("submitit not installed, dataset will run in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available in dataset: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit in dataset: {e}")
+        else:
+            print(f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}")
 
-        for i in range(self.num_operators):
-            angle = angles[i]
+        # Use cleanup=False to keep process group alive for solver
+        # Solver will handle cleanup when it's done
+        with DistributedContext(seed=42, cleanup=False) as ctx:
+            print(f"DistributedContext: rank {ctx.rank} / {ctx.world_size}")
+
+            # Setup device
+            device = ctx.device
             
-            # Create anisotropic blur kernel with specific angle
-            kernel = gaussian_blur(
-                sigma=(sigma_x, sigma_y), 
-                angle=angle, 
-                device=str(device)
-            )
+            # Set random seed for reproducibility
+            torch.manual_seed(self.seed)
+            np.random.seed(self.seed)
             
-            # Create blur operator with circular padding
-            blur_op = Blur(filter=kernel, padding="circular", device=str(device))
+            # Generate synthetic ground truth image (grayscale)
+            ground_truth = self._generate_synthetic_image(device)
+            
+            # Create anisotropic Gaussian blur kernels with equiangular directions
+            physics_list = []
+            
+            # Set sigma values based on a fixed blur strength in normalized coordinates
+            sigma_x = self.image_size * 0.02  # 2% of image size
+            sigma_y = self.image_size * 0.01  # 1% of image size (anisotropic)
+            
+            # Calculate equiangular directions based on num_operators
+            angles = np.linspace(0, 180, self.num_operators)
 
-            # Set the noise model with reproducible random generator
-            rng = torch.Generator(device=device).manual_seed(self.seed + i)
-            blur_op.noise_model = GaussianNoise(sigma=self.noise_level, rng=rng)
-            blur_op = blur_op.to(device)
+            for i in range(self.num_operators):
+                angle = angles[i]
+                
+                # Create anisotropic blur kernel with specific angle
+                kernel = gaussian_blur(
+                    sigma=(sigma_x, sigma_y), 
+                    angle=angle, 
+                    device=str(device)
+                )
+                
+                # Create blur operator with circular padding
+                blur_op = Blur(filter=kernel, padding="circular", device=str(device))
 
-            physics_list.append(blur_op)
+                # Set the noise model with reproducible random generator
+                rng = torch.Generator(device=device).manual_seed(self.seed + i)
+                blur_op.noise_model = GaussianNoise(sigma=self.noise_level, rng=rng)
+                blur_op = blur_op.to(device)
 
-        # Stack physics operators into a single operator
-        stacked_physics = stack(*physics_list)
+                physics_list.append(blur_op)
 
-        # Generate measurements (returns a TensorList)
-        measurement = stacked_physics(ground_truth)
+            # Stack physics operators into a single operator
+            stacked_physics = stack(*physics_list)
 
-        # Clamp measurements to valid range
-        for i in range(len(measurement)):
-            measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
+            # Generate measurements (returns a TensorList)
+            measurement = stacked_physics(ground_truth)
 
-        # Save debug visualization
-        save_measurements_figure(ground_truth, measurement)
+            # Clamp measurements to valid range
+            for i in range(len(measurement)):
+                measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
+
+            if ctx.rank == 0:
+                # Save debug visualization
+                save_measurements_figure(ground_truth, measurement)
 
         return dict(
             ground_truth=ground_truth,
