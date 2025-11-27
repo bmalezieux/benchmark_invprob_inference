@@ -49,7 +49,7 @@ class Objective(BaseObjective):
         self.ground_truth_shape = ground_truth_shape if ground_truth_shape is not None else ground_truth.shape
         self.num_operators = num_operators if num_operators is not None else 1
         self.psnr_metric = PSNR(max_pixel=max_pixel)
-        self.ssim_metric = SSIM(max_pixel=max_pixel)
+        # self.ssim_metric = SSIM(max_pixel=max_pixel)
         self.min_pixel = min_pixel
         self.max_pixel = max_pixel
         self.evaluation_count = 0
@@ -92,7 +92,7 @@ class Objective(BaseObjective):
             reconstruction = reconstruction.to(self.ground_truth.device)
 
             psnr_tensor = self.psnr_metric(reconstruction, self.ground_truth)
-            ssim_tensor = self.ssim_metric(reconstruction, self.ground_truth)
+            # ssim_tensor = self.ssim_metric(reconstruction, self.ground_truth)
 
             # Handle batch case - take mean across batch dimension
             psnr = (
@@ -100,11 +100,11 @@ class Objective(BaseObjective):
                 if psnr_tensor.numel() > 1
                 else psnr_tensor.item()
             )
-            ssim = (
-                ssim_tensor.mean().item()
-                if ssim_tensor.numel() > 1
-                else ssim_tensor.item()
-            )
+            # ssim = (
+            #     ssim_tensor.mean().item()
+            #     if ssim_tensor.numel() > 1
+            #     else ssim_tensor.item()
+            # )
             
             # Save comparison figure
             output_dir = "evaluation_output/" + name.replace('/', '_').replace('..', '')
@@ -112,7 +112,8 @@ class Objective(BaseObjective):
             save_comparison_figure(
                 self.ground_truth, 
                 reconstruction,
-                metrics={'psnr': psnr, 'ssim': ssim},
+                # metrics={'psnr': psnr, 'ssim': ssim},
+                metrics={'psnr': psnr},
                 output_dir=output_dir,
                 filename=f'eval_{self.evaluation_count:04d}.png',
                 evaluation_count=self.evaluation_count
@@ -120,7 +121,8 @@ class Objective(BaseObjective):
 
         # Return value (primary metric for stopping criterion) and additional metrics
         # Use PSNR as the primary metric (higher is better)
-        return dict(value=-psnr, psnr=psnr, ssim=ssim)
+        return dict(value=-psnr, psnr=psnr)
+        # return dict(value=-psnr, psnr=psnr, ssim=ssim)
 
     def get_one_result(self):
         """Return one solution for which the objective can be evaluated.

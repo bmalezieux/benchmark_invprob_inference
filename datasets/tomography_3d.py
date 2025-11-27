@@ -296,71 +296,39 @@ class Dataset(BaseDataset):
             # Get data directory
             data_path = config.get_data_path(key="tomography_3d")
             
-            # Setup caching
-            cache_dir = Path(data_path)
-            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            dataset = self._load_or_download_dataset(
+                data_dir=Path(data_path),
+                filename="Walnut-CBCT_8.pt"
+            )
+
+            # Extract ground truth volume
+            ref_rc = dataset["dense_reconstruction"]
+            ground_truth = ref_rc.float().to(device)
             
-            # Create cache filename based on parameters
-            cache_file = cache_dir / f"walnut_{self.num_operators}ops_{self.num_projections}proj_{self.geometry_type}_seed{self.seed}.pt"
+            # Add batch and channel dimensions: (D, H, W) -> (1, 1, D, H, W)
+            if ground_truth.dim() == 3:
+                ground_truth = ground_truth.unsqueeze(0).unsqueeze(0)
             
-            # Try to load from cache
-            if cache_file.exists():
-                print(f"Loading cached 3D data from {cache_file}")
-                cached_data = torch.load(cache_file, map_location=device)
-                ground_truth = cached_data['ground_truth']
-                measurement_list = cached_data['measurements']
-                img_shape = ground_truth.shape[-3:]  # (D, H, W)
-                print(f"Loaded cached 3D ground truth with shape: {ground_truth.shape}")
-                print(f"Image shape (D, H, W): {img_shape}")
-                
-                # Still need to load dataset for trajectory (needed by factory)
-                dataset = self._load_or_download_dataset(
-                    data_dir=Path(data_path),
-                    filename="Walnut-CBCT_8.pt"
-                )
-            else:
-                print(f"Cache not found, generating new 3D data...")
-                # Load dataset
-                dataset = self._load_or_download_dataset(
-                    data_dir=Path(data_path),
-                    filename="Walnut-CBCT_8.pt"
-                )
-                
-                # Extract ground truth volume
-                ref_rc = dataset["dense_reconstruction"]
-                ground_truth = ref_rc.float().to(device)
-                
-                # Add batch and channel dimensions: (D, H, W) -> (1, 1, D, H, W)
-                if ground_truth.dim() == 3:
-                    ground_truth = ground_truth.unsqueeze(0).unsqueeze(0)
-                
-                img_shape = ground_truth.shape[-3:]  # (D, H, W)
-                
-                print(f"Loaded 3D ground truth with shape: {ground_truth.shape}")
-                print(f"Image shape (D, H, W): {img_shape}")
+            img_shape = ground_truth.shape[-3:]  # (D, H, W)
             
-                # Create measurements factory
-                measurements_factory = self._create_measurements_factory(
-                    dataset=dataset,
-                    device_str=str(device)
-                )
-                
-                # For benchopt, we need to return a list of measurements
-                # Create them by calling the factory for each operator
-                measurement_list = []
-                for i in range(self.num_operators):
-                    meas = measurements_factory(i, device, None)
-                    measurement_list.append(meas)
-                
-                print(f"Created {len(measurement_list)} measurements")
-                
-                # Save to cache
-                print(f"Saving 3D data to cache: {cache_file}")
-                torch.save({
-                    'ground_truth': ground_truth.cpu(),
-                    'measurements': [m.cpu() for m in measurement_list],
-                }, cache_file)
-                print(f"3D data cached successfully")
+            print(f"Loaded 3D ground truth with shape: {ground_truth.shape}")
+            print(f"Image shape (D, H, W): {img_shape}")
+        
+            # Create measurements factory
+            measurements_factory = self._create_measurements_factory(
+                dataset=dataset,
+                device_str=str(device)
+            )
+            
+            # For benchopt, we need to return a list of measurements
+            # Create them by calling the factory for each operator
+            measurement_list = []
+            for i in range(self.num_operators):
+                meas = measurements_factory(i, device, None)
+                measurement_list.append(meas)
+            
+            print(f"Created {len(measurement_list)} measurements")
             
             # Ensure data is on correct device
             ground_truth = ground_truth.to(device)

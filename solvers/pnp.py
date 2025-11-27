@@ -375,3 +375,5 @@ class Solver(BaseSolver):
             dict: Dictionary with 'reconstruction' key
         """
         return dict(reconstruction=self.reconstruction, name=self.name)
+
+    def get_next(self, stop_val): return stop_val + 1
