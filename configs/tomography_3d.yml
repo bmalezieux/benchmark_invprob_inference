@@ -5,27 +5,26 @@
 objective:
   - reconstruction_objective
 
-# Dataset filters (with parameters) - small number of projections for faster testing
+# Dataset filters (with parameters)
 dataset:
   - tomography_3d:
       num_operators: 2
-      num_projections: 100
+      num_projections: 50
       geometry_type: conebeam
       use_dataset_sinogram: true
 
-# Solver filters (with parameters) - single process version
+# Solver filters (with parameters)
 solver:
   - PnP:
       denoiser: drunet
-      denoiser_sigma: 0.01
-      init_method: ["zeros"]
-      slurm_gres, slurm_ntasks_per_node, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size: [
-        ["gpu:2", 2, true, true, 96, 16, 2],
+      init_method: ["pseudo_inverse"]
+      slurm_gres, slurm_ntasks_per_node, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size, denoiser_sigma, denoiser_lambda_relaxation: [
+        ["gpu:2", 2, true, true, [8,256,256], [2,16,16], 8, 0.03, 10.0],
       ]
 
 
 # Run parameters
-max-runs: 10
+max-runs: 40
 n-repetitions: 1
 plot: true
 html: true

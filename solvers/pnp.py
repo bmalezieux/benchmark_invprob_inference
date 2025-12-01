@@ -1,10 +1,8 @@
 import os
 from datetime import datetime
 import torch
-from typing import List, Optional
 from deepinv.optim.data_fidelity import L2
 from deepinv.optim.prior import PnP
-from deepinv.models import DRUNet
 from deepinv.distrib import DistributedContext, distribute
 from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
@@ -68,7 +66,7 @@ def initialize_reconstruction(
         return torch.zeros(signal_shape, device=device)
 
     elif method == 'pseudo_inverse':
-        x_init = operator.A_dagger(measurements)
+        x_init = operator.A_dagger(measurements).clamp(0, None)
         return x_init
 
     else:
@@ -87,8 +85,9 @@ class Solver(BaseSolver):
     # Solver parameters
     parameters = {
         'denoiser': ['drunet'],
+        'denoiser_lambda_relaxation': [None],
         'step_size': [None],
-        'step_size_scale': [0.9],
+        'step_size_scale': [0.99],
         'denoiser_sigma': [0.05],
         'distribute_physics': [False],
         'distribute_denoiser': [False],
@@ -197,10 +196,10 @@ class Solver(BaseSolver):
                 ctx,
                 patch_size=self.patch_size,
                 receptive_field_size=self.receptive_field_size,
-                tiling_dims=2,
+                tiling_dims=(-3,-2,-1) if len(self.ground_truth_shape) == 5 else (-2,-1),
                 max_batch_size=self.max_batch_size,
             )
-        
+
         # Create prior and data fidelity
         prior = PnP(denoiser=denoiser)
         data_fidelity = L2()
@@ -280,7 +279,13 @@ class Solver(BaseSolver):
                 self.reconstruction = self.reconstruction - step_size * grad
 
                 # Denoising step
-                self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                if self.denoiser_lambda_relaxation is None:
+                    self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                else:
+                    denoised_reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                    lamda = self.denoiser_lambda_relaxation
+                    alpha = (step_size * lamda) / (1 + step_size * lamda)
+                    self.reconstruction = (1 - alpha) * self.reconstruction + alpha * denoised_reconstruction
 
                 # Clip reconstruction to valid range after denoising
                 if self.clip_range is not None:

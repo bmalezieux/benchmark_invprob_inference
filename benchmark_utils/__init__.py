@@ -257,4 +257,3 @@ def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=torch.float32
     model = model.to(dtype).to(device)
     
     return model
-

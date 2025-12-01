@@ -9,7 +9,7 @@ objective:
 dataset:
   - tomography_2d:
       img_size: 1024
-      num_operators: [1, 4]
+      num_operators: 1
       num_angles: 100
       noise_level: 0.01
 

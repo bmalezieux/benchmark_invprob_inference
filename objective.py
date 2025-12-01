@@ -105,7 +105,7 @@ class Objective(BaseObjective):
             #     if ssim_tensor.numel() > 1
             #     else ssim_tensor.item()
             # )
-            
+
             # Save comparison figure
             output_dir = "evaluation_output/" + name.replace('/', '_').replace('..', '')
             self.evaluation_count += 1
