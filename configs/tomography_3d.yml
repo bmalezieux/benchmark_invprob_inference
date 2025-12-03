@@ -19,7 +19,10 @@ solver:
       denoiser: drunet
       init_method: ["pseudo_inverse"]
       slurm_gres, slurm_ntasks_per_node, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size, denoiser_sigma, denoiser_lambda_relaxation: [
+        ["gpu:2", 2, true, true, [8,256,256], [2,16,16], 10, 0.03, 10.0],
         ["gpu:2", 2, true, true, [8,256,256], [2,16,16], 8, 0.03, 10.0],
+        ["gpu:2", 2, true, true, [8,256,256], [2,16,16], 4, 0.03, 10.0],
+        ["gpu:2", 2, true, true, [8,256,256], [2,16,16], 2, 0.03, 10.0],
       ]
 
 

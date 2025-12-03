@@ -102,8 +102,8 @@ class Dataset(BaseDataset):
             physics_list = []
 
             # Set sigma values based on a fixed blur strength in normalized coordinates
-            sigma_x = self.image_size * 0.02  # 2% of image size
-            sigma_y = self.image_size * 0.01  # 1% of image size (anisotropic)
+            sigma_x = self.image_size * 0.01  # 1% of image size
+            sigma_y = self.image_size * 0.005  # 0.5% of image size (anisotropic)
             
             # Calculate equiangular directions based on num_operators
             # Angles are evenly distributed over 180 degrees (since blur is symmetric)

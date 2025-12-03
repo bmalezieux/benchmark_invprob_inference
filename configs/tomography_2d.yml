@@ -8,7 +8,7 @@ objective:
 # Dataset filters (with parameters)
 dataset:
   - tomography_2d:
-      img_size: 1024
+      img_size: 2048
       num_operators: 1
       num_angles: 100
       noise_level: 0.01
@@ -25,7 +25,7 @@ solver:
       ]
 
 # Run parameters
-max-runs: 10
+max-runs: 100
 n-repetitions: 1
 plot: true
 html: true

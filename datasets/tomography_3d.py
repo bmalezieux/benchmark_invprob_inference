@@ -220,8 +220,12 @@ class Dataset(BaseDataset):
             sinogram_tensor = sinogram_tensor.permute(1, 0, 2)  # (h, angles, v)
             sinogram_tensor = sinogram_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, h, angles, v)
             
+            # Make contiguous after permute to avoid ASTRA contiguity errors
+            sinogram_tensor = sinogram_tensor.contiguous()
+            
             print(f"Final sinogram tensor shape: {sinogram_tensor.shape}")
             print(f"  Format: (batch, channels, detector_h, angles, detector_v)")
+            print(f"  Is contiguous: {sinogram_tensor.is_contiguous()}")
             print(f"=== Sinogram Loading Complete ===\n")
             
             num_angles = sinogram_tensor.shape[3]
@@ -252,6 +256,10 @@ class Dataset(BaseDataset):
                 
                 # Slice along the angles dimension (dim 3)
                 measurement = sinogram_tensor[:, :, :, start_idx:end_idx, :].to(device)
+                
+                # Ensure contiguity for ASTRA (slicing can break contiguity)
+                measurement = measurement.contiguous()
+                
                 print(f"Measurements factory: operator {index} gets angles [{start_idx}:{end_idx}], shape {measurement.shape}")
                 
                 return measurement

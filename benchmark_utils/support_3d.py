@@ -34,7 +34,7 @@ class Conv2dTo3d(nn.Module):
             self.weight_3d.data[:] = 1e-8
             with torch.no_grad():
                 if self.kernel_size % 2 == 1:
-                    self.weight_3d[:,:,self.kernel_size//2 + 1] = input_module.weight.data.clone()
+                    self.weight_3d[:,:,self.kernel_size//2] = input_module.weight.data.clone()
                 else:
                     self.weight_3d[:] = input_module.weight.data[:,:,None].clone() / self.kernel_size
        
@@ -45,7 +45,7 @@ class Conv2dTo3d(nn.Module):
             self.weight_3d.data[:] = 1e-8
             with torch.no_grad():
                 if self.kernel_size % 2 == 1:
-                    self.weight_3d[:,:,self.kernel_size//2 + 1] = input_module.weight.data.clone()
+                    self.weight_3d[:,:,self.kernel_size//2] = input_module.weight.data.clone()
                 else:
                     self.weight_3d[:] = input_module.weight.data[:,:,None].clone() / self.kernel_size
             
