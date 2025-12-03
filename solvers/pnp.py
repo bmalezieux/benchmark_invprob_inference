@@ -1,15 +1,14 @@
 import os
 from datetime import datetime
 import torch
-from typing import List, Optional
 from deepinv.optim.data_fidelity import L2
 from deepinv.optim.prior import PnP
-from deepinv.models import DRUNet
 from deepinv.distrib import DistributedContext, distribute
-from deepinv.physics import Physics
+from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
 
 from benchopt import BaseSolver
+from benchmark_utils import create_drunet_denoiser
 
 
 def compute_step_size_from_operator(
@@ -67,7 +66,7 @@ def initialize_reconstruction(
         return torch.zeros(signal_shape, device=device)
 
     elif method == 'pseudo_inverse':
-        x_init = operator.A_dagger(measurements)
+        x_init = operator.A_dagger(measurements).clamp(0, None)
         return x_init
 
     else:
@@ -86,8 +85,9 @@ class Solver(BaseSolver):
     # Solver parameters
     parameters = {
         'denoiser': ['drunet'],
+        'denoiser_lambda_relaxation': [None],
         'step_size': [None],
-        'step_size_scale': [0.9],
+        'step_size_scale': [0.99],
         'denoiser_sigma': [0.05],
         'distribute_physics': [False],
         'distribute_denoiser': [False],
@@ -107,7 +107,7 @@ class Solver(BaseSolver):
         
         Args:
             measurement: Noisy measurements (TensorList or tensor)
-            physics: Forward operator (stacked physics or list)
+            physics: Forward operator (stacked physics or list or callable)
             ground_truth_shape: Shape of the ground truth tensor
             num_operators: Number of operators in the physics
         """
@@ -120,12 +120,28 @@ class Solver(BaseSolver):
         self.world_size = 1
         self.ctx = None
 
-        try:
-            import submitit
-            submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+        # Check if distributed environment is already set up
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            # Already initialized by dataset or previous call
             self.world_size = int(os.environ.get("WORLD_SIZE", 1))
-        except (ImportError, RuntimeError):
-            pass
+            print(f"Distributed environment already initialized: world_size={self.world_size}")
+        else:
+            # Try to initialize
+            try:
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+                print(f"Initialized distributed environment via submitit: world_size={self.world_size}")
+            except ImportError:
+                print("submitit not installed, running in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit (possibly already called): {e}")
+                print("Running in non-distributed mode")
 
         self.distributed_mode = self.world_size > 1
         self.reconstruction = torch.zeros(self.ground_truth_shape)
@@ -145,7 +161,9 @@ class Solver(BaseSolver):
             cb: Callback function to call at each iteration. Returns False when to stop.
         """
         if self.distributed_mode:
-            with DistributedContext(seed=42) as ctx:
+            # Use cleanup=True to properly destroy process group when done
+            # This will reuse the process group created by dataset (if any)
+            with DistributedContext(seed=42, cleanup=True) as ctx:
                 self.ctx = ctx
                 self._run_with_context(cb, ctx)
         else:
@@ -162,7 +180,12 @@ class Solver(BaseSolver):
             Tuple of (prior, data_fidelity)
         """
         if self.denoiser == 'drunet':
-            denoiser = DRUNet(pretrained="download").to(device)
+            # Use the utility function to create appropriate DRUNet
+            denoiser = create_drunet_denoiser(
+                ground_truth_shape=self.ground_truth_shape,
+                device=device,
+                dtype=torch.float32
+            )
         else:
             raise ValueError(f"Unknown denoiser: {self.denoiser}")
                 
@@ -173,10 +196,10 @@ class Solver(BaseSolver):
                 ctx,
                 patch_size=self.patch_size,
                 receptive_field_size=self.receptive_field_size,
-                tiling_dims=2,
+                tiling_dims=(-3,-2,-1) if len(self.ground_truth_shape) == 5 else (-2,-1),
                 max_batch_size=self.max_batch_size,
             )
-        
+
         # Create prior and data fidelity
         prior = PnP(denoiser=denoiser)
         data_fidelity = L2()
@@ -256,7 +279,13 @@ class Solver(BaseSolver):
                 self.reconstruction = self.reconstruction - step_size * grad
 
                 # Denoising step
-                self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                if self.denoiser_lambda_relaxation is None:
+                    self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                else:
+                    denoised_reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                    lamda = self.denoiser_lambda_relaxation
+                    alpha = (step_size * lamda) / (1 + step_size * lamda)
+                    self.reconstruction = (1 - alpha) * self.reconstruction + alpha * denoised_reconstruction
 
                 # Clip reconstruction to valid range after denoising
                 if self.clip_range is not None:
@@ -291,10 +320,24 @@ class Solver(BaseSolver):
         else:
             measurement = self.measurement
 
-        # Distribute physics if in distributed mode and requested
+        # Handle physics: can be stacked physics, factory function, or list
         if ctx is not None and self.distribute_physics:
-            physics = distribute(self.physics, ctx)
+            # In distributed mode with distribute_physics=True
+            physics = distribute(
+                self.physics, 
+                ctx, 
+                num_operators=self.num_operators,
+                type_object='linear_physics'
+            )
+        elif callable(self.physics) and not isinstance(self.physics, Physics):
+            # Factory function in single-process mode: instantiate all operators and stack them
+            physics_list = []
+            for i in range(self.num_operators):
+                op = self.physics(i, self.device, None)
+                physics_list.append(op)
+            physics = stack(*physics_list)
         else:
+            # Already a stacked physics or single physics operator
             physics = self.physics
             if hasattr(physics, 'to'):
                 physics = physics.to(self.device)
@@ -337,3 +380,5 @@ class Solver(BaseSolver):
             dict: Dictionary with 'reconstruction' key
         """
         return dict(reconstruction=self.reconstruction, name=self.name)
+
+    def get_next(self, stop_val): return stop_val + 1
