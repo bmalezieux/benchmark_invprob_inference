@@ -8,7 +8,7 @@ objective:
 # Dataset filters (with parameters) - smaller size for faster distributed test
 dataset:
   - highres_color_image:
-      image_size: 1024
+      image_size: 2048
       num_operators: 8
       noise_level: 0.1
 
@@ -19,9 +19,9 @@ solver:
       denoiser_sigma: 0.005
       step_size: 0.1
       init_method: ["zeros"]
-      slurm_gres, slurm_ntasks_per_node, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size: [
-        ["gpu:1", 1, false, false, 0, 0, 0],
-        ["gpu:2", 2, true, true, 448, 32, 0],
+      slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size: [
+        ["gpu:1", 1, 1, false, false, 0, 0, 0],
+        ["gpu:2", 2, 1, true, true, 448, 32, 0],
       ]
 
 

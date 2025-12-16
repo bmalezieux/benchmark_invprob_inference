@@ -203,7 +203,13 @@ class Solver(BaseSolver):
         # Create prior and data fidelity
         prior = PnP(denoiser=denoiser)
         data_fidelity = L2()
-        
+
+        if ctx is not None and self.distribute_physics:
+            data_fidelity = distribute(
+                data_fidelity,
+                ctx,
+            )
+
         return prior, data_fidelity
     
     def _compute_step_size(self, physics, device):
