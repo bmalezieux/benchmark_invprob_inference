@@ -3,7 +3,7 @@ from datetime import datetime
 import torch
 from deepinv.optim.data_fidelity import L2
 from deepinv.optim.prior import PnP
-from deepinv.distrib import DistributedContext, distribute
+from deepinv.distributed import DistributedContext, distribute
 from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
 

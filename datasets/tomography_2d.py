@@ -15,7 +15,7 @@ from torchvision import transforms
 
 from deepinv.physics import Tomography, GaussianNoise
 from deepinv.utils.demo import get_image_url
-from deepinv.distrib import DistributedContext
+from deepinv.distributed import DistributedContext
 
 from benchopt import BaseDataset
 from benchopt import config

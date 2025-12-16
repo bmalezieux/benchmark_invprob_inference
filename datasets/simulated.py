@@ -9,7 +9,7 @@ import numpy as np
 
 from deepinv.physics import GaussianNoise, stack
 from deepinv.physics.blur import Blur, gaussian_blur
-from deepinv.distrib import DistributedContext
+from deepinv.distributed import DistributedContext
 
 from benchopt import BaseDataset
 from benchmark_utils import save_measurements_figure

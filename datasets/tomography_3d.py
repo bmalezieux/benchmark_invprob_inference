@@ -11,7 +11,7 @@ from typing import Optional, Dict
 
 from deepinv.physics import TomographyWithAstra
 from deepinv.utils.demo import load_torch_url
-from deepinv.distrib import DistributedContext
+from deepinv.distributed import DistributedContext
 
 from benchopt import BaseDataset
 from benchopt import config
