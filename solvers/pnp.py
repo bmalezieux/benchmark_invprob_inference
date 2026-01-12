@@ -92,7 +92,7 @@ class Solver(BaseSolver):
         'distribute_physics': [False],
         'distribute_denoiser': [False],
         'patch_size': [128],
-        'receptive_field_size': [32],
+        'overlap': [32],
         'max_batch_size': [0],
         'init_method': ['pseudo_inverse'],
         'slurm_nodes': [1],
@@ -195,7 +195,7 @@ class Solver(BaseSolver):
                 denoiser,
                 ctx,
                 patch_size=self.patch_size,
-                receptive_field_size=self.receptive_field_size,
+                overlap=self.overlap,
                 tiling_dims=(-3,-2,-1) if len(self.ground_truth_shape) == 5 else (-2,-1),
                 max_batch_size=self.max_batch_size,
             )
