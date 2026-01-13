@@ -277,7 +277,18 @@ class Solver(BaseSolver):
         """
         with torch.no_grad():
             
-            while cb():
+            while True:
+                keep_going = cb()
+
+                if self.distributed_mode and self.ctx is not None:
+                    # Synchronize stopping criterion
+                    decision = torch.tensor([float(keep_going)], device=self.device)
+                    self.ctx.broadcast_(decision, src=0)
+                    keep_going = bool(decision.item())
+
+                if not keep_going:
+                    break
+
                 # Data fidelity gradient step
                 grad = data_fidelity.grad(self.reconstruction, measurements, physics)
 
