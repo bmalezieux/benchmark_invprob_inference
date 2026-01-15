@@ -1,50 +1,75 @@
 Quickstart
 ==========
 
-This guide will help you get started with the benchmark in just a few steps.
+Get the benchmark running in a few simple steps. This guide assumes you have access to a SLURM cluster.
+
+Environment Setup
+~~~~~~~~~~~~~~~~~
+
+First, connect to your SLURM cluster. This benchmark is designed to run on high-performance computing (HPC) clusters such as Jean-Zay (IDRIS, France) or similar SLURM-based systems.
+
+**Load required modules** (example for Jean-Zay):
+
+.. code-block:: bash
+
+   module load pytorch-gpu/py3/2.7.0
+
+This loads PyTorch with GPU support and Python 3. Check your cluster's documentation for the equivalent module names.
 
 Installation
 ~~~~~~~~~~~~
 
-First, install the required dependencies:
+Install the required Python packages (first time only):
 
 .. code-block:: bash
 
    pip install deepinv benchopt
 
-Next, clone the project repository:
+Clone the benchmark repository:
 
 .. code-block:: bash
 
    git clone https://github.com/bmalezieux/benchmark_invprob_inference.git
    cd benchmark_invprob_inference
 
-Running Your First Benchmark
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Running the Benchmark
+~~~~~~~~~~~~~~~~~~~~~
 
-**Multi-GPU on Cluster**
-
-For distributed execution across multiple GPUs on a cluster, use:
+To run the benchmark, it's very simple—just use this command from the project root:
 
 .. code-block:: bash
 
-   benchopt run . --parallel-config ./configs/config_parallel.yml --config ./configs/highres_imaging.yml
+   python -m benchopt run . 
+       --parallel-config ./configs/config_parallel.yml \
+       --config ./configs/highres_imaging.yml
 
-**Multi-Process CPU with torchrun**
+**What each argument does:**
 
-You can also run the benchmark on a single machine with multiple CPU processes using ``torchrun``:
+- ``.`` — Run the benchmark in the current directory
+- ``--parallel-config`` — SLURM configuration (number of GPUs per job, CPU cores, walltime)
+- ``--config`` — Experiment definition (dataset, solvers, image sizes, noise levels, parameters)
 
-.. code-block:: bash
+See :doc:`config_guide` for details on customizing configurations.
 
-   benchopt run . --parallel-config ./configs/torchrun_config.yml --config ./configs/highres_imaging_torchrun.yml
+**What happens during execution:**
+
+1. **Configuration parsing** — BenchOpt reads both configs and generates a grid of experiments
+2. **Job submission** — Each job executes one complete reconstruction pipeline: a solver (PnP or unrolling) running on a specific dataset and parameter combination
+3. **Parallel execution** — Each job can run in parallel on multiple GPUs if specified in the SLURM config
+4. **Results collection** — Convergence curves (PSNR), runtime, and memory usage are saved for each job
 
 Viewing Results
 ~~~~~~~~~~~~~~~
 
-After the benchmark completes, open the generated HTML report:
+After the benchmark completes, open the HTML report:
 
 .. code-block:: bash
 
    outputs/benchmark_invprob_inference.html
 
-The report contains runtime comparisons, convergence curves, and detailed solver performance metrics.
+**The report includes:**
+
+- Runtime comparisons across solvers and configurations
+- Convergence curves (PSNR vs iterations)
+- Memory and computational resource usage
+- Interactive plots for detailed exploration
