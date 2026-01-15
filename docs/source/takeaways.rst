@@ -53,6 +53,6 @@ Configuration Tips
 **Troubleshooting**
 
 - Out of memory → reduce ``patch_size`` or enable ``distribute_denoiser``
-- Quality issues with tiling → increase ``receptive_field_size``
+- Quality issues with tiling → increase ``overlap``
 
 
