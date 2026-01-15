@@ -85,7 +85,7 @@ The execution grid specifies different GPU configurations to benchmark and compa
 
 .. code-block:: yaml
 
-   slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size: [
+   slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, overlap, max_batch_size: [
      ["gpu:1", 1, 1, false, false, 0, 0, 0],
      ["gpu:2", 2, 1, true, true, 448, 32, 0],]
 
@@ -114,7 +114,7 @@ This creates a grid comparing two configurations:
 - ``distribute_physics: true`` = **Split 8 blur operators across 2 GPUs** (4 each)
 - ``distribute_denoiser: true`` = **Spatial tiling**: Split large image into patches
 - ``patch_size: 448`` = Each patch is 448×448 pixels
-- ``receptive_field_size: 32`` = Overlap region for smooth transitions between patches
+- ``overlap: 32`` = Overlap region for smooth transitions between patches
 - **Use case**: Scalability test, distributed computing efficiency
 
 

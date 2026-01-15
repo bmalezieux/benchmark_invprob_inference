@@ -84,7 +84,7 @@ This section defines GPU configurations and parallelization strategies. Each row
 
 .. code-block:: yaml
 
-   slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, receptive_field_size, max_batch_size: [
+   slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, overlap, max_batch_size: [
      ["gpu:1", 1, 1, false, false, 0,   0,  0],
      ["gpu:2", 2, 1, true,  true,  448, 32, 0],
    ]
