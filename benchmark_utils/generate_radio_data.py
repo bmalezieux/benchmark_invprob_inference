@@ -1,13 +1,19 @@
 import sys
 import os
+from pathlib import Path
+
+# Add benchmark root to sys.path to resolve benchmark_utils imports when run as script
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import torch
 import submitit
 import torch.nn.functional as F
-from pathlib import Path
 from benchopt.config import get_data_path
-from benchmark_utils.radio_utils import get_meerkat_visibilities
+
+
 from datasets.radio_interferometry import Dataset
+
+from benchmark_utils.radio_utils import get_meerkat_visibilities
 from benchmark_utils import load_cached_example
 
 def generate_data_for_size(image_size):
@@ -20,7 +26,7 @@ def generate_data_for_size(image_size):
     # Verify/Load image
     try:
         img = load_cached_example(
-            "CBSD_0010.png",
+            "m1_n.fits",
             cache_dir=data_path, 
             grayscale=True, 
             device="cpu"
@@ -65,7 +71,7 @@ def run_process():
     """Run generation process (local or distributed)."""
     
     # Get parameters to process
-    image_sizes = Dataset.parameters['image_size']
+    image_sizes = Dataset.parameters["image_size"]
     
     # Get configuration from environment variables
     # These can be set by the user before running benchopt
