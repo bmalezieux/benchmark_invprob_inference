@@ -7,28 +7,29 @@ ENV_DIR=$1
 # Install dependencies using pip in the environment
 echo "Installing dependencies..."
 $ENV_DIR/bin/pip install --upgrade pip
-$ENV_DIR/bin/pip install deepinv
+$ENV_DIR/bin/pip install deepinv torch
 $ENV_DIR/bin/pip install submitit
 
-# Check if Karabo-Pipeline is in the current directory (local workspace)
-if [ -d "Karabo-Pipeline" ]; then
-    echo "Installing dependencies from local Karabo-Pipeline/environment.yaml..."
-    # Use CONDA_EXE if available, or try to find conda
-    if [ -z "$CONDA_EXE" ]; then
-        CONDA_BIN=$(which conda)
-    else
-        CONDA_BIN="$CONDA_EXE"
-    fi
-    
-    echo "Using conda: $CONDA_BIN"
-    "$CONDA_BIN" env update -p $ENV_DIR -f Karabo-Pipeline/environment.yaml --prune
-    
-    echo "Installing local Karabo-Pipeline..."
-    $ENV_DIR/bin/pip install -e Karabo-Pipeline
-else
-    echo "Cloning and installing Karabo-Pipeline..."
-    $ENV_DIR/bin/pip install git+https://github.com/aleph-group/Karabo-Pipeline.git
+# Clone Karabo-Pipeline if not present
+if [ ! -d "Karabo-Pipeline" ]; then
+    echo "Cloning Karabo-Pipeline..."
+    git clone https://github.com/aleph-group/Karabo-Pipeline.git
 fi
+
+echo "Installing dependencies from Karabo-Pipeline/karabo_env.yml..."
+
+# Use CONDA_EXE if available, or try to find conda
+if [ -z "$CONDA_EXE" ]; then
+    CONDA_BIN=$(which conda)
+else
+    CONDA_BIN="$CONDA_EXE"
+fi
+
+echo "Using conda: $CONDA_BIN"
+"$CONDA_BIN" env update -p "$ENV_DIR" -f Karabo-Pipeline/karabo_env.yml
+
+echo "Installing Karabo-Pipeline..."
+"$ENV_DIR/bin/pip" install -e Karabo-Pipeline
 
 # Run the data generation script
 echo "Running data generation..."
