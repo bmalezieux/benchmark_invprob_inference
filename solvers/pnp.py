@@ -283,7 +283,7 @@ class Solver(BaseSolver):
                 if self.distributed_mode and self.ctx is not None:
                     # Synchronize stopping criterion
                     decision = torch.tensor([float(keep_going)], device=self.device)
-                    self.ctx.broadcast_(decision, src=0)
+                    self.ctx.broadcast(decision, src=0)
                     keep_going = bool(decision.item())
 
                 if not keep_going:

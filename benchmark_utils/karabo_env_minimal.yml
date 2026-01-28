@@ -1,0 +1,38 @@
+name: karabo
+channels:
+  - i4ds
+  - nvidia/label/cuda-11.7.0
+  - conda-forge
+channel_priority: strict
+dependencies:
+  - python=3.9
+  - numpy>=1.21,!=1.24.0,<2.0
+  - scipy>=1.10.1
+  - pandas
+  - matplotlib
+  - dask=2022.12.1
+  - distributed
+  - xarray>=2022.11
+  - requests
+  - ipython
+  - h5py
+  - mpi4py
+  - mpich
+  - dask-mpi
+  - aratmospy=1.0.0
+  - astropy
+  - bdsf=1.10.2
+  - bluebild=0.1.0
+  - casacore
+  - python-casacore
+  - cudatoolkit
+  - eidos=1.1.0
+  - healpy
+  - katbeam=0.1.0
+  - montagepy=6.0.0
+  - reproject
+  - ska-gridder-nifty-cuda=0.3.0
+  - ska-sdp-datamodels=0.1.3
+  - ska-sdp-func-python=0.1.4
+  - tools21cm=2.0.2
+  - i4ds::oskarpy

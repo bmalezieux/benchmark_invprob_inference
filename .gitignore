@@ -21,3 +21,6 @@ data
 debug_output
 evaluation_output
 benchopt_run
+
+# Karabo
+Karabo-Pipeline

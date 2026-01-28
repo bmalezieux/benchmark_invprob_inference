@@ -1,54 +1,41 @@
 import sys
 import os
+import argparse
 from pathlib import Path
+import numpy as np
 
 # Add benchmark root to sys.path to resolve benchmark_utils imports when run as script
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-import torch
-import submitit
-import torch.nn.functional as F
-from benchopt.config import get_data_path
+from benchmark_utils.karabo_utils import generate_meerkat_visibilities
+from benchmark_utils.radio_utils import load_and_resize_image
 
-
-from datasets.radio_interferometry import Dataset
-
-from benchmark_utils.radio_utils import get_meerkat_visibilities
-from benchmark_utils import load_cached_example
-
-def generate_data_for_size(image_size):
+def generate_data_for_size(image_size, data_path, device="cpu"):
     """Generate data for a specific image size."""
     
-    # Setup paths
-    data_path = Path(get_data_path(key="radio_interferometry"))
-    data_path.mkdir(parents=True, exist_ok=True)
-    
-    # Verify/Load image
-    try:
-        img = load_cached_example(
-            "m1_n.fits",
-            cache_dir=data_path, 
-            grayscale=True, 
-            device="cpu"
-        )
-    except Exception as e:
-        print(f"Could not load example image: {e}")
-        return
-
     # Cache directory
+    data_path = Path(data_path)
     ms_cache_dir = data_path / "meerkat_cache"
     ms_cache_dir.mkdir(parents=True, exist_ok=True)
-
-    # Determine device for this task
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Generating data for image size {image_size} on {device}")
     
-    # Resize image
-    _, _, h, w = img.shape
-    resized_img = img.clone()
-    if h != image_size or w != image_size:
-        resized_img = F.interpolate(img, size=(image_size, image_size), mode='bicubic')
-        resized_img = torch.clamp(resized_img, 0, 1)
+    # Verify/Load image
+    fits_file = data_path / "m1_n.fits"
+    if not fits_file.exists():
+        print(f"File not found: {fits_file}")
+        # Try finding it in default benchmark data dir relative to script
+        default_data_dir = Path(__file__).resolve().parent.parent / "data"
+        fits_file = default_data_dir / "m1_n.fits"
+        if not fits_file.exists():
+            print(f"Could not find m1_n.fits in {data_path} or {default_data_dir}")
+            return
+            
+    try:
+        resized_img = load_and_resize_image(fits_file, image_size)
+    except Exception as e:
+        print(f"Could not load/process example image: {e}")
+        return
+
+    print(f"Generating data for image size {image_size} on {device}")
     
     # Simulation parameters (fixed)
     pixel_size_arcsec = 1.0
@@ -56,7 +43,7 @@ def generate_data_for_size(image_size):
     obs_duration = 600
 
     # Generate visibilities
-    vis_path = get_meerkat_visibilities(
+    vis_path = generate_meerkat_visibilities(
         resized_img,
         ms_cache_dir,
         pixel_size_arcsec=pixel_size_arcsec,
@@ -64,60 +51,26 @@ def generate_data_for_size(image_size):
         obs_duration=obs_duration,
         device=device
     )
+    
+    # Cache the ground truth image
+    gt_path = ms_cache_dir / f"image_{image_size}.npy"
+    np.save(gt_path, resized_img)
+    print(f"Ground truth cached at: {gt_path}")
+
     print(f"Visibilities ready for size {image_size}: {vis_path}")
 
 
-def run_process():
-    """Run generation process (local or distributed)."""
-    
-    # Get parameters to process
-    image_sizes = Dataset.parameters["image_size"]
-    
-    # Get configuration from environment variables
-    # These can be set by the user before running benchopt
-    gpus_per_job = int(os.environ.get("BENCHOPT_GPUS_PER_JOB", 1))
-    
-    print(f"Configuration: GPUS_PER_JOB={gpus_per_job}")
-
-    # Check for SLURM
-    has_slurm = False
-    try:
-        import subprocess
-        subprocess.run(["sbatch", "--version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        has_slurm = True
-    except:
-        pass
-        
-    if has_slurm:
-        print(f"SLURM detected. Submitting {len(image_sizes)} jobs...")
-        executor = submitit.AutoExecutor(folder="debug_output")
-        executor.update_parameters(
-            timeout_min=60,
-            gpus_per_node=gpus_per_job,
-            nodes=1,
-            cpus_per_task=10,
-        )
-        
-        # Submit array of jobs
-        # Each job will have access to 'gpus_per_job' GPUs
-        jobs = executor.map_array(generate_data_for_size, image_sizes)
-        
-        print(f"Jobs submitted ({[j.job_id for j in jobs]}). Waiting for completion...")
-        # Wait for all jobs to complete
-        for job in jobs:
-            job.result()
-        print("All jobs completed.")
-    else:
-        print("Running locally...")
-        if torch.cuda.is_available():
-            n_devices = torch.cuda.device_count()
-            print(f"Local GPU count: {n_devices}")
-            if n_devices < gpus_per_job:
-                print(f"Warning: Requested {gpus_per_job} GPUs per job but only {n_devices} available locally.")
-        
-        for size in image_sizes:
-            generate_data_for_size(size)
-
 if __name__ == "__main__":
-    run_process()
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image_size", type=int, nargs="+", default=[256])
+    parser.add_argument("--data_path", type=str, required=True)
+    args = parser.parse_args()
+    
+    # Check if GPU is available 
+    # In karabo env, we assume cpu usually, or if torch is missing we definitely use cpu
+    # But this script is running in karabo env WITHOUT torch.
+    device = "cpu"
+    print(f"Running generation on {device}")
+    
+    for size in args.image_size:
+        generate_data_for_size(size, args.data_path, device)

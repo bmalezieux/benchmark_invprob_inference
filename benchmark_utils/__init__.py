@@ -4,10 +4,16 @@ This module provides shared utilities for datasets, solvers, and objectives,
 including visualization and data loading helpers.
 """
 from pathlib import Path
-import torch
 import matplotlib.pyplot as plt
-from deepinv.utils.demo import download_example, load_image
-from deepinv.models import DRUNet
+try:
+    import torch
+    from deepinv.utils.demo import download_example, load_image
+    from deepinv.models import DRUNet
+except ImportError:
+    torch = None
+    download_example = None
+    load_image = None
+    DRUNet = None
 
 
 def tensor_to_numpy(tensor):
@@ -197,7 +203,7 @@ def load_cached_example(name, cache_dir=None, **kwargs):
         return load_image(str(cached_file), **kwargs)
 
 
-def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=torch.float32):
+def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=None):
     """Create a DRUNet denoiser appropriate for the given ground truth shape.
     
     Automatically detects whether to use:
@@ -220,6 +226,12 @@ def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=torch.float32
     DRUNet
         Configured DRUNet denoiser model.
     """
+    if torch is None:
+        raise ImportError("torch is required for create_drunet_denoiser")
+        
+    if dtype is None:
+        dtype = torch.float32
+
     from .support_3d import transform_2d_to_3d, patch_drunet_3d
     
     # Determine dimensionality
