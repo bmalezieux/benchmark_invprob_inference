@@ -30,19 +30,17 @@ class Dataset(BaseDataset):
     def is_installed(cls, env_name=None, quiet=True, **kwargs):
         # 1. Check if module can be imported (dependencies present)
         try:
-             import deepinv
-             from deepinv.distributed import DistributedContext
+            import deepinv
+            from deepinv.distributed import DistributedContext
         except ImportError:
             return False
         
-        # 2. Check if data is present (simple check for cache dir, 
-        # precise check is hard without loading image)
-        # Check using relative path to be safe
+        # 2. Check if data is present
         repo_root = Path(__file__).parent.parent
-        ms_cache_dir = repo_root / "data" / "meerkat_cache"
+        ms_cache_dir = repo_root / "data" / "radio_interferometry" / "meerkat_cache"
         
         if not ms_cache_dir.exists() or not any(ms_cache_dir.iterdir()):
-             return False
+            return False
 
         return True
 
@@ -66,12 +64,18 @@ class Dataset(BaseDataset):
         # Check if distributed environment is already set up
         if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
             try:
-                # If not using torch.distributed.launch, likely local run or single GPU
-                pass
+                import submitit
+                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+                print("Initialized distributed environment via submitit in dataset")
             except ImportError:
-                pass
-            except RuntimeError:
-                pass
+                print("submitit not installed, dataset will run in non-distributed mode")
+            except RuntimeError as e:
+                # This could be SLURM not available or other runtime issues
+                error_msg = str(e).lower()
+                if "slurm" in error_msg or "environment" in error_msg:
+                    print(f"SLURM environment not available in dataset: {e}")
+                else:
+                    print(f"RuntimeError initializing submitit in dataset: {e}")
 
         with DistributedContext(seed=self.seed, cleanup=False) as ctx:
             device = ctx.device

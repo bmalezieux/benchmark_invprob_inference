@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from benchmark_utils.karabo_utils import generate_meerkat_visibilities
 from benchmark_utils.radio_utils import load_and_resize_image
 
-def generate_data_for_size(image_size, data_path, device="cpu"):
+def generate_data_for_size(image_size, data_path, use_gpus=False):
     """Generate data for a specific image size."""
     
     # Cache directory
@@ -35,7 +35,7 @@ def generate_data_for_size(image_size, data_path, device="cpu"):
         print(f"Could not load/process example image: {e}")
         return
 
-    print(f"Generating data for image size {image_size} on {device}")
+    print(f"Generating data for image size {image_size} with use_gpus={use_gpus}")
     
     # Simulation parameters (fixed)
     pixel_size_arcsec = 1.0
@@ -49,7 +49,7 @@ def generate_data_for_size(image_size, data_path, device="cpu"):
         pixel_size_arcsec=pixel_size_arcsec,
         freq_hz=freq_hz,
         obs_duration=obs_duration,
-        device=device
+        use_gpus=use_gpus
     )
     
     # Cache the ground truth image
@@ -59,18 +59,23 @@ def generate_data_for_size(image_size, data_path, device="cpu"):
 
     print(f"Visibilities ready for size {image_size}: {vis_path}")
 
+def main_generation_loop(image_sizes, data_path, use_gpus):
+    for size in image_sizes:
+        generate_data_for_size(size, data_path, use_gpus=use_gpus)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_size", type=int, nargs="+", default=[256])
     parser.add_argument("--data_path", type=str, required=True)
+    parser.add_argument(
+        "--use_gpus", action="store_true", help="Whether to use GPUs for simulation."
+    )
     args = parser.parse_args()
     
     # Check if GPU is available 
     # In karabo env, we assume cpu usually, or if torch is missing we definitely use cpu
     # But this script is running in karabo env WITHOUT torch.
-    device = "cpu"
-    print(f"Running generation on {device}")
-    
-    for size in args.image_size:
-        generate_data_for_size(size, args.data_path, device)
+    use_gpus = args.use_gpus
+    print(f"Running generation with use_gpus={use_gpus}")
+
+    main_generation_loop(args.image_size, args.data_path, use_gpus)

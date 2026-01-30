@@ -1,0 +1,40 @@
+Bootstrap: docker
+From: condaforge/miniforge3
+
+%files
+    install_scripts/karabo_env_minimal.yml /opt/karabo_env_minimal.yml
+    Karabo-Pipeline /opt/Karabo-Pipeline
+
+%post
+    # Install basic system tools
+    apt-get update && apt-get install -y git build-essential wget
+
+    # Create the conda environment from the yaml file
+    mamba env create -f /opt/karabo_env_minimal.yml -n karabo_env
+    
+    # Clean up conda cache to reduce image size
+    mamba clean --all -f -y
+
+    # Activate environment to install pip packages
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate karabo_env
+    
+    # Install python dependencies that might not be in the yaml or need pip
+    pip install submitit pyyaml astropy
+    
+    # Install Karabo-Pipeline from copied sources
+    cd /opt/Karabo-Pipeline
+    pip install .
+
+%environment
+    # Set up environment variables so the shell automatically uses the conda env
+    export CONDA_EXE=/opt/conda/bin/conda
+    export CONDA_PREFIX=/opt/conda/envs/karabo_env
+    export PATH=/opt/conda/envs/karabo_env/bin:$PATH
+    
+    # Initialize conda in shell
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate karabo_env
+    
+    # Set paths for common mount points if needed
+    export PYTHONPATH=$PYTHONPATH:/workspace/deepinv:/workspace/benchmark_invprob_inference

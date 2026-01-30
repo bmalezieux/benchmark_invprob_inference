@@ -68,7 +68,7 @@ def generate_meerkat_visibilities(
     freq_hz: float = 1e9,
     obs_duration: float = 600, # 10 min
     integral_time: float = 10, # 10 sec integration
-    device: str = "cpu",
+    use_gpus: bool = False,
 ):
     """
     Generate visibilities for MeerKAT.
@@ -107,11 +107,6 @@ def generate_meerkat_visibilities(
     
     pixel_size_deg = pixel_size_arcsec / 3600.0
     sky = image_to_skymodel(image, ra_center, dec_center, pixel_size_deg)
-    
-    # Configure simulation
-    use_gpus = False
-    if device != "cpu":
-        use_gpus = True
 
     simulation = InterferometerSimulation(
         channel_bandwidth_hz=1e6,

@@ -1,0 +1,25 @@
+job:
+  image_size: [256]
+  data_path: "./data/radio_interferometry"
+  use_gpus: true
+
+singularity:
+  image_path: "karabo.sif"  # Relative to project root
+  mount_point: "/workspace"
+  # Directory inside container where the command runs
+  working_dir: "/workspace/benchmark_invprob_inference" 
+  singularity_install_cmd: "idrcontmgr cp {image_path}" 
+
+slurm:
+  folder: "debug_output/slurm_logs"
+  job_name: "karabo_simulator"
+  nodes: 1
+  ntasks_per_node: 1
+  cpus_per_gpu: 10
+  gres: "gpu:1"
+  time: "00:10:00"
+  hint: "nomultithread"
+  setup:
+    - "module purge"
+    - "module load singularity"
+    - "set -x"

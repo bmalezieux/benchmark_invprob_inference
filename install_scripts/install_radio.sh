@@ -1,66 +1,51 @@
 #!/bin/bash
 set -e
 
-# The main environment directory used by benchopt
-ENV_DIR=$1
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
 
-# 1. Install dependencies for the MAIN environment (Python 3.12 compatible)
-echo "Installing main dependencies (deepinv, astropy)..."
-
-# Use CONDA_EXE if available, or try to find conda
-if [ -z "$CONDA_EXE" ]; then
-    CONDA_BIN=$(which conda)
-else
-    CONDA_BIN="$CONDA_EXE"
-fi
-
-if [ -z "$CONDA_BIN" ]; then
-    echo "Conda not found! Cannot proceed with Karabo environment creation."
+# 1. Check dependencies
+if ! command -v apptainer &> /dev/null && ! command -v singularity &> /dev/null; then
+    log "Error: apptainer or singularity could not be found."
     exit 1
 fi
 
-echo "Using conda: $CONDA_BIN"
+# 2. Setup Directories
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$REPO_DIR"
 
-# Install dependencies for main env
-# We use pip for deepinv, astropy. 
-$ENV_DIR/bin/pip install -e ../deepinv
-$ENV_DIR/bin/pip install astropy
+log "Repository root: $REPO_DIR"
 
-# 2. Setup separate Karabo environment (Python 3.9)
-echo "Setting up Karabo environment..."
-
-# Clone Karabo-Pipeline if not present
+# 3. Check for Karabo-Pipeline
 if [ ! -d "Karabo-Pipeline" ]; then
-    echo "Cloning Karabo-Pipeline..."
+    log "Cloning Karabo-Pipeline..."
     git clone https://github.com/aleph-group/Karabo-Pipeline.git
 fi
 
-# Initialize conda for shell interaction
-eval "$($CONDA_BIN shell.bash hook)"
+# 4. Check/Build Image
+IMAGE_NAME="karabo.sif"
+IMAGE_PATH="$REPO_DIR/$IMAGE_NAME"
 
-KARABO_ENV_NAME="karabo_env_benchopt"
+if [ ! -f "$IMAGE_PATH" ]; then
+    log "Building singularity image $IMAGE_PATH..."
+    if command -v apptainer &> /dev/null; then
+         apptainer build "$IMAGE_PATH" "$SCRIPT_DIR/karabo.def"
+    else
+         singularity build "$IMAGE_PATH" "$SCRIPT_DIR/karabo.def"
+    fi
+else
+    log "Image found at $IMAGE_PATH."
+fi
 
-# Create/Update environment from environment.yaml (which has python 3.9)
-echo "Creating/Updating conda env $KARABO_ENV_NAME..."
-$CONDA_BIN env update -n "$KARABO_ENV_NAME" -f benchmark_utils/karabo_env_minimal.yml
+# 5. Check Python Dependencies for Submission
+if ! python -c "import submitit" &> /dev/null || ! python -c "import yaml" &> /dev/null; then
+    log "Installing submitit and pyyaml for job submission..."
+    pip install submitit pyyaml
+fi
 
-# Activate the environment
-echo "Activating $KARABO_ENV_NAME..."
-conda activate "$KARABO_ENV_NAME"
-
-# Install Karabo itself in editable mode
-pip install -e Karabo-Pipeline
-
-# 3. Run data generation
-echo "Running data generation with active environment..."
-# Data path relative to benchmark root
-DATA_PATH="./data/radio_interferometry"
-mkdir -p "$DATA_PATH"
-
-# Run generation
-python benchmark_utils/generate_radio_data.py --data_path "$DATA_PATH" --image_size 256
-
-echo "Deactivating..."
-conda deactivate
-
-echo "Installation and data generation complete."
+# 6. Run Submission Script
+log "Running submission script..."
+# Pass all arguments to the python script
+python "$SCRIPT_DIR/submit_job.py" "$@"

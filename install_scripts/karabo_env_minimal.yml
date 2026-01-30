@@ -3,7 +3,6 @@ channels:
   - i4ds
   - nvidia/label/cuda-11.7.0
   - conda-forge
-channel_priority: strict
 dependencies:
   - python=3.9
   - numpy>=1.21,!=1.24.0,<2.0
@@ -17,7 +16,7 @@ dependencies:
   - ipython
   - h5py
   - mpi4py
-  - mpich
+  - openmpi
   - dask-mpi
   - aratmospy=1.0.0
   - astropy
