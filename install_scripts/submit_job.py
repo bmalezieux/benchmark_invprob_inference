@@ -84,7 +84,10 @@ def main():
     parser = argparse.ArgumentParser(description="Submit or run Karabo simulation job")
     parser.add_argument("--config", default="install_scripts/config_slurm.yaml", help="Path to YAML config")
     parser.add_argument("--local", action="store_true", help="Run locally instead of submitting to Slurm")
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
+    
+    if unknown:
+        print(f"Warning: Ignoring unknown arguments: {unknown}")
     
     # Allow config loading from relative path
     config_path = Path(args.config)

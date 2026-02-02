@@ -47,5 +47,16 @@ fi
 
 # 6. Run Submission Script
 log "Running submission script..."
+
+ARGS=("$@")
+
+# Check if Slurm is available (check for sbatch)
+if ! command -v sbatch &> /dev/null; then
+    log "Slurm command 'sbatch' not found. Forcing local execution."
+    ARGS+=("--local")
+fi
+
+echo "Arguments for submission script: ${ARGS[*]}"
+
 # Pass all arguments to the python script
-python "$SCRIPT_DIR/submit_job.py" "$@"
+python "$SCRIPT_DIR/submit_job.py" "${ARGS[@]}"
