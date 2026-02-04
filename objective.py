@@ -71,12 +71,7 @@ class Objective(BaseObjective):
             max_pixel=self.max_pixel,
         )
 
-    def evaluate_result(self, reconstruction, name, gpu_memory_allocated_mb=None, 
-                       gpu_memory_reserved_mb=None, gpu_memory_max_allocated_mb=None,
-                       gpu_available_memory_mb=None, gradient_time_sec=None, 
-                       gradient_memory_delta_mb=None, gradient_memory_peak_mb=None,
-                       denoise_time_sec=None, denoise_memory_delta_mb=None, 
-                       denoise_memory_peak_mb=None, **kwargs):
+    def evaluate_result(self, reconstruction, name, **kwargs):
         """Compute the objective value(s) given the output of a solver.
 
         Parameters
@@ -85,28 +80,16 @@ class Objective(BaseObjective):
             Reconstructed image from solver.
         name : str
             Name identifier for the solver/configuration.
-        gpu_memory_allocated_mb : float, optional
-            Currently allocated GPU memory in MB.
-        gpu_memory_reserved_mb : float, optional
-            Reserved GPU memory in MB.
-        gpu_memory_max_allocated_mb : float, optional
-            Peak GPU memory in MB.
-        gpu_available_memory_mb : float, optional
-            Available GPU memory in MB.
-        gradient_time_sec : float, optional
-            Time spent in gradient computation step.
-        gradient_memory_delta_mb : float, optional
-            Memory change during gradient step.
-        gradient_memory_peak_mb : float, optional
-            Peak memory during gradient step.
-        denoise_time_sec : float, optional
-            Time spent in denoising step.
-        denoise_memory_delta_mb : float, optional
-            Memory change during denoising step.
-        denoise_memory_peak_mb : float, optional
-            Peak memory during denoising step.
         **kwargs : dict
-            Additional keyword arguments (for flexibility)
+            Optional GPU and step metrics including:
+            - gpu_memory_allocated_mb, gpu_memory_reserved_mb, 
+              gpu_memory_max_allocated_mb, gpu_available_memory_mb
+            - gradient_time_sec, gradient_memory_allocated_mb,
+              gradient_memory_reserved_mb, gradient_memory_delta_mb,
+              gradient_memory_peak_mb
+            - denoise_time_sec, denoise_memory_allocated_mb,
+              denoise_memory_reserved_mb, denoise_memory_delta_mb,
+              denoise_memory_peak_mb
             
         Returns
         -------
@@ -149,29 +132,10 @@ class Objective(BaseObjective):
         # Return value (primary metric for stopping criterion) and additional metrics
         result = dict(value=-psnr, psnr=psnr)
         
-        # Add GPU metrics if provided
-        if gpu_memory_allocated_mb is not None:
-            result['gpu_memory_allocated_mb'] = gpu_memory_allocated_mb
-        if gpu_memory_reserved_mb is not None:
-            result['gpu_memory_reserved_mb'] = gpu_memory_reserved_mb
-        if gpu_memory_max_allocated_mb is not None:
-            result['gpu_memory_max_allocated_mb'] = gpu_memory_max_allocated_mb
-        if gpu_available_memory_mb is not None:
-            result['gpu_available_memory_mb'] = gpu_available_memory_mb
-        
-        # Add per-step metrics if provided
-        if gradient_time_sec is not None:
-            result['gradient_time_sec'] = gradient_time_sec
-        if gradient_memory_delta_mb is not None:
-            result['gradient_memory_delta_mb'] = gradient_memory_delta_mb
-        if gradient_memory_peak_mb is not None:
-            result['gradient_memory_peak_mb'] = gradient_memory_peak_mb
-        if denoise_time_sec is not None:
-            result['denoise_time_sec'] = denoise_time_sec
-        if denoise_memory_delta_mb is not None:
-            result['denoise_memory_delta_mb'] = denoise_memory_delta_mb
-        if denoise_memory_peak_mb is not None:
-            result['denoise_memory_peak_mb'] = denoise_memory_peak_mb
+        # Add all non-None metrics from kwargs to result
+        for key, value in kwargs.items():
+            if value is not None:
+                result[key] = value
         
         return result
 

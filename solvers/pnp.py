@@ -148,7 +148,9 @@ class Solver(BaseSolver):
         
         # Initialize GPU metrics tracker (device will be set in _run_with_context)
         self.gpu_tracker = None
-        self.step_metrics = {}
+        
+        # Initialize results storage for per-iteration tracking
+        self.all_results = []
         
         # Generate name based on whether using slurm or torchrun
         if hasattr(self, 'slurm_ntasks_per_node') and self.slurm_ntasks_per_node > 1:
@@ -157,6 +159,10 @@ class Solver(BaseSolver):
             self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + f"torchrun_{self.torchrun_nproc_per_node}proc"
         else:
             self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + "_single"
+        
+        # Add rank to name in distributed mode
+        if self.distributed_mode:
+            self.name = self.name + f"_rank{int(os.environ.get('RANK', 0))}"
     
     def run(self, cb):
         """Run the PnP algorithm with callback for iteration control.
@@ -287,47 +293,53 @@ class Solver(BaseSolver):
                 if self.distributed_mode and self.ctx is not None:
                     # Synchronize stopping criterion
                     decision = torch.tensor([float(keep_going)], device=self.device)
-                    self.ctx.broadcast_(decision, src=0)
+                    self.ctx.broadcast(decision, src=0)
                     keep_going = bool(decision.item())
 
                 if not keep_going:
                     break
+                
+                # Reset iteration tracking for new iteration
+                self.gpu_tracker.reset_iteration_tracking()
 
                 # ===== GRADIENT STEP =====
-                # Track memory and time for gradient computation
-                self.gpu_tracker.snapshot('gradient', phase='start')
-                
-                # Data fidelity gradient step
-                grad = data_fidelity.grad(self.reconstruction, measurements, physics)
-
-                # Gradient descent step
-                self.reconstruction = self.reconstruction - step_size * grad
-                               
-                self.gpu_tracker.snapshot('gradient', phase='end')
+                with self.gpu_tracker.track_step('gradient'):
+                    # Data fidelity gradient step
+                    grad = data_fidelity.grad(self.reconstruction, measurements, physics)
+                    # Gradient descent step
+                    self.reconstruction = self.reconstruction - step_size * grad
 
                 # ===== DENOISING STEP =====
-                # Track memory and time for denoising
-                self.gpu_tracker.snapshot('denoise', phase='start')
-                
-                # Denoising step
-                if self.denoiser_lambda_relaxation is None:
-                    self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
-                else:
-                    denoised_reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
-                    lamda = self.denoiser_lambda_relaxation
-                    alpha = (step_size * lamda) / (1 + step_size * lamda)
-                    self.reconstruction = (1 - alpha) * self.reconstruction + alpha * denoised_reconstruction
+                with self.gpu_tracker.track_step('denoise'):
+                    # Denoising step
+                    if self.denoiser_lambda_relaxation is None:
+                        self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                    else:
+                        denoised_reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                        lamda = self.denoiser_lambda_relaxation
+                        alpha = (step_size * lamda) / (1 + step_size * lamda)
+                        self.reconstruction = (1 - alpha) * self.reconstruction + alpha * denoised_reconstruction
 
-                # Clip reconstruction to valid range after denoising
-                if self.clip_range is not None:
-                    self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
-                
-                self.gpu_tracker.snapshot('denoise', phase='end')
+                    # Clip reconstruction to valid range after denoising
+                    if self.clip_range is not None:
+                        self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
 
                 # Synchronize all CUDA operations and distributed processes
                 # This ensures accurate timing measurements
                 if self.device.type == 'cuda':
                     torch.cuda.synchronize(self.device)
+                
+                # Capture iteration metrics after both steps complete
+                self._capture_iteration_result()
+
+    def _capture_iteration_result(self):
+        """Capture current iteration's metrics and append to results list."""
+        if self.gpu_tracker is None:
+            return
+        
+        # Capture only GPU/performance metrics per iteration
+        iteration_result = self.gpu_tracker.capture_iteration_result()
+        self.all_results.append(iteration_result)
 
     def _run_with_context(self, cb, ctx=None):
         """Run PnP with optional distributed context.
@@ -380,23 +392,27 @@ class Solver(BaseSolver):
         
         # Setup components
         prior, data_fidelity = self._setup_components(self.device, ctx)
-        cb()
+        #cb()
         print("Components set up.")
         
         # Compute step size
         step_size = self._compute_step_size(physics, self.device)
-        cb()
+        #cb()
         print("Step size computed:", step_size)
 
         # Initialize reconstruction
         self.reconstruction = self._initialize_reconstruction(physics, self.measurement, self.device)
-        cb()
+        #cb()
         print("Reconstruction initialized.")
         
         # Clip initial reconstruction if requested
         if self.clip_range is not None:
             self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
 
+        # Synchronize before capturing initial state
+        if self.device.type == 'cuda':
+            torch.cuda.synchronize(self.device)
+            
         print("Starting PnP iterations.")
 
         # Run PnP iterations
@@ -408,7 +424,31 @@ class Solver(BaseSolver):
             torch.cuda.synchronize(self.device)
         if ctx is not None:
             ctx.barrier()
+        
+        # Save results to file (both distributed and single-GPU modes)
+        self._save_result()
 
+    def _save_result(self):
+        """Save GPU metrics per rank."""
+        if not self.all_results:
+            return
+            
+        import pandas as pd
+        from pathlib import Path
+        
+        output_dir = Path("outputs")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Use self.name which already contains timestamp and rank/single suffix
+        if self.max_batch_size > 0:
+            csv_path = output_dir / f"{self.name}_bs{self.max_batch_size}_gpu_metrics.csv"
+        else:
+            csv_path = output_dir / f"{self.name}_gpu_metrics.csv"
+        
+        df = pd.DataFrame(self.all_results)
+        df.to_csv(csv_path, index=False)
+        print(f"Saved {len(self.all_results)} GPU metric records to {csv_path}")
+    
     def get_result(self):
         """Return the reconstruction result.
         
@@ -432,6 +472,8 @@ class Solver(BaseSolver):
             all_step_metrics = self.gpu_tracker.get_all_step_metrics()
             for step_name, metrics in all_step_metrics.items():
                 result[f'{step_name}_time_sec'] = metrics['time_sec']
+                result[f'{step_name}_memory_allocated_mb'] = metrics['memory_allocated_mb']
+                result[f'{step_name}_memory_reserved_mb'] = metrics['memory_reserved_mb']
                 result[f'{step_name}_memory_delta_mb'] = metrics['memory_delta_mb']
                 result[f'{step_name}_memory_peak_mb'] = metrics['memory_peak_mb']
         
