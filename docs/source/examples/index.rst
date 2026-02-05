@@ -7,3 +7,5 @@ Detailed examples showcasing the benchmark for different datasets. Each example 
    :maxdepth: 1
 
    highres_example
+   tomography_2d
+   tomography_3d

@@ -35,17 +35,16 @@ Clone the benchmark repository:
 Running the Benchmark
 ~~~~~~~~~~~~~~~~~~~~~
 
-To run the benchmark, it's very simple—just use this command from the project root:
+To run the benchmark, just run this command from the project root:
 
 .. code-block:: bash
 
-   python -m benchopt run . 
+   benchopt run . 
        --parallel-config ./configs/config_parallel.yml \
        --config ./configs/highres_imaging.yml
 
 **What each argument does:**
 
-- ``.`` — Run the benchmark in the current directory
 - ``--parallel-config`` — SLURM configuration (number of GPUs per job, CPU cores, walltime)
 - ``--config`` — Experiment definition (dataset, solvers, image sizes, noise levels, parameters)
 

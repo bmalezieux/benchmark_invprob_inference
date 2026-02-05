@@ -16,7 +16,7 @@ The high-resolution color image dataset is a multi-operator inverse problem wher
 
 **Dataset Preview**
 
-.. image:: ../_static/images/highres_preview.png
+.. image:: ../_static/images/main_images/highres_preview.png
    :alt: High-res color dataset preview
    :align: center
    :width: 100%
@@ -26,15 +26,75 @@ The high-resolution color image dataset is a multi-operator inverse problem wher
 Configuration: Experiment Setup
 -------------------------------
 
+**Benchmark Purpose**
+
+This is a toy example designed to test **distributed computing efficiency** on large-scale inverse problems. The high-resolution image (2048×2048) combined with forward operators (8 blurs) and a pretrained prior (DRUNet) creates computational demands that benefit from distributed processing across multiple GPUs. 
+
 We use the configuration file ``configs/highres_imaging.yml`` to set up the experiment. The configuration specifies:
 
 1. **Objective**: What metric to evaluate (PSNR, etc.)
 2. **Dataset**: Which dataset to use and its parameters
 3. **Solver**: Which solver to run and its hyperparameters
+4. **Execution Grid**: Different GPU configurations to benchmark and compare
 
+Execution Grid
+~~~~~~~~~~~~~~
+
+The execution grid specifies different GPU configurations:
+
+.. code-block:: yaml
+
+   slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, overlap, max_batch_size: [
+     ["gpu:1", 1, 1, false, false, 0, 0, 0],
+     ["gpu:2", 2, 1, true, true, 448, 32, 0],
+     ["gpu:4", 4, 1, true, true, 448, 32, 0],
+     ]
+
+**Important**: To ensure proper distributed parallelization, the number of tasks per node (``slurm_ntasks_per_node``) must equal the number of GPUs (``slurm_gres``). This ensures one process per GPU.
+
+This creates a grid comparing three configurations:
+
+**Configuration 1: Single GPU (baseline)**
+
+.. code-block:: yaml
+
+   ["gpu:1", 1, 1, false, false, 0, 0, 0]
+
+- ``slurm_gres: gpu:1`` = 1 GPU
+- ``slurm_ntasks_per_node: 1`` = 1 process per GPU
+- ``distribute_physics: false`` = No parallelization of blur operators
+- ``distribute_denoiser: false`` = Full image processed at once
+- **Purpose**: Baseline performance on limited resources
+
+
+**Configuration 2: 2-GPU with Distribution**
+
+.. code-block:: yaml
+
+   ["gpu:2", 2, 1, true, true, 448, 32, 0]
+
+- ``slurm_gres: gpu:2`` = 2 GPUs
+- ``slurm_ntasks_per_node: 2`` = 2 processes (one per GPU)
+- ``distribute_physics: true`` = **Split 8 blur operators across 2 GPUs** (4 each)
+- ``distribute_denoiser: true`` = **Spatial tiling**: Split large image into patches
+- ``patch_size: 448`` = Each patch is 448×448 pixels
+- ``overlap: 32`` = Overlap region for smooth transitions between patches
+- **Purpose**: Multi-GPU scalability with operator and spatial distribution
+
+
+**Configuration 3: 4-GPU with Increased Distribution**
+
+.. code-block:: yaml
+
+   ["gpu:4", 4, 1, true, true, 448, 32, 0]
+
+- Similar to Config 2, but with 4 GPUs.
+- **Purpose**: Further scalability test with more GPU resources
+
+For more details on distributed computing, see the `DeepInv distributed documentation <https://deepinv.github.io/deepinv/user_guide/reconstruction/distributed.html>`_.
 
 Dataset Parameters
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
 
 The dataset section configures the high-resolution color image problem:
 
@@ -78,44 +138,6 @@ The solver section configures the Plug-and-Play (PnP) reconstruction algorithm:
 
 - ``init_method``: How to initialize the reconstruction. 
 
-Execution Grid
-~~~~~~~~~~~~~~
-
-The execution grid specifies different GPU configurations to benchmark and compare:
-
-.. code-block:: yaml
-
-   slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, overlap, max_batch_size: [
-     ["gpu:1", 1, 1, false, false, 0, 0, 0],
-     ["gpu:2", 2, 1, true, true, 448, 32, 0],]
-
-This creates a grid comparing two configurations:
-
-**Configuration 1: Single GPU (baseline)**
-
-.. code-block:: yaml
-
-   ["gpu:1", 1, 1, false, false, 0, 0, 0]
-
-- ``slurm_gres: gpu:1`` = 1 GPU
-- ``slurm_ntasks_per_node: 1`` = Single process
-- ``distribute_physics: false`` = No parallelization of blur operators
-- ``distribute_denoiser: false`` = Full image processed at once
-- **Use case**: Baseline performance, memory-constrained GPUs
-
-**Configuration 2: Multi-GPU with Distribution**
-
-.. code-block:: yaml
-
-   ["gpu:2", 2, 1, true, true, 448, 32, 0]
-
-- ``slurm_gres: gpu:2`` = 2 GPUs
-- ``slurm_ntasks_per_node: 2`` = 2 parallel processes
-- ``distribute_physics: true`` = **Split 8 blur operators across 2 GPUs** (4 each)
-- ``distribute_denoiser: true`` = **Spatial tiling**: Split large image into patches
-- ``patch_size: 448`` = Each patch is 448×448 pixels
-- ``overlap: 32`` = Overlap region for smooth transitions between patches
-- **Use case**: Scalability test, distributed computing efficiency
 
 
 Interpreting Results
@@ -123,41 +145,32 @@ Interpreting Results
 
 **Benchmark Results**
 
-The benchmark compares two configurations:
+Below is an interactive dashboard comparing the three configurations:
 
-- **Configuration 1**: Single GPU (baseline)
-- **Configuration 2**: Multi-GPU with distributed physics and denoiser 
+.. raw:: html
 
-**PSNR vs. Iteration Count**
+   <iframe src="../_static/images/highres_color_image/dashboard.html" width="100%" height="800px" style="border: none; border-radius: 5px;"></iframe>
 
-.. image:: ../_static/images/highres_psnr_iteration.png
-   :alt: PSNR convergence curves for highres dataset
-   :align: center
-   :width: 100%
+Interpretation
+~~~~~~~~~~~~~~
 
-This plot shows reconstruction quality (PSNR in dB) as a function of iteration count. 
+**PSNR vs. Iteration Count & PSNR vs. Computation Time**
 
-**Interpretation:**
+All configurations converge to similar final PSNR values, confirming that distributed processing preserves reconstruction quality. Multi-GPU configurations reach the target PSNR significantly faster than the single-GPU baseline, demonstrating computational efficiency gains.
 
-- Both configurations converge to similar PSNR values (quality is preserved with distribution)
-- Multi-GPU setup does not degrade reconstruction quality despite spatial tiling
+**Time Breakdown: Gradient and Denoiser**
 
-**PSNR vs. Computation Time**
+The stacked bar chart illustrates the computational time spent on gradient computation and denoiser execution for each configuration. The denoiser clearly dominates the overall runtime, making it the most computationally intensive component. Increasing the number of GPUs substantially reduces denoiser execution time, while gradient computation time remains largely unchanged. This demonstrates the effectiveness of distributing the denoiser across multiple GPUs to alleviate the primary performance bottleneck. In contrast, because gradient computation is relatively inexpensive, communication overhead in the distributed setting slightly increases total runtime compared to the single-GPU case.
 
-.. image:: ../_static/images/highres_psnr_time.png
-   :alt: PSNR vs runtime for highres dataset
-   :align: center
-   :width: 100%
+**GPU Memory Usage: Gradient and Denoiser**
 
-This plot shows reconstruction quality (PSNR) versus actual wall-clock time. It directly compares the efficiency of different configurations.
+This figure presents GPU memory consumption during gradient computation and denoiser execution. Tracking peak allocated memory is essential for preventing out-of-memory (OOM) errors. For multi-GPU configurations, the reported values correspond to rank 0 (the main process), which is representative of the other ranks.
 
-**Interpretation:**
-
-- Multi-GPU runs reach target PSNR faster than the single-GPU baseline
+An interesting behavior is observed in which the 2-GPU configuration exhibits higher denoiser memory usage (4.3 GB) than the single-GPU setup (1.6 GB). This behavior can arise because, for certain denoiser models, peak memory allocation is highly sensitive to image dimensions, even when the effective input size changes only slightly. Further discussion of this effect is provided on the :doc:`takeaways page <../takeaways/denoiser_scaling>`.
 
 **Key Insights**
 
-1. **Consistency**: Both configurations achieve similar final PSNR, confirming distributed processing doesn't hurt quality
-2. **Efficiency**: Multi-GPU reaches target PSNR faster (lower time-to-convergence)
-3. **Scalability**: The multi-GPU setup demonstrates distributed solver viability
+1. **Consistency**: All configurations achieve similar final PSNR, confirming that distributed processing preserves reconstruction quality.
+2. **Efficiency**: Multi-GPU configurations reach the target PSNR faster (lower time-to-convergence).
+3. **Bottleneck**: The denoiser is the primary bottleneck in this problem and benefits significantly from distribution across multiple GPUs.
 
