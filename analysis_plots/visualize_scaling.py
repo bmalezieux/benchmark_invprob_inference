@@ -1,14 +1,15 @@
-"""
+""" 
 Visualization script for scaling benchmark results.
 
 This script reads parquet files from benchmark scaling outputs and creates
 interactive Plotly visualizations for strong scaling and parallel efficiency.
 
 The script generates the following visualizations:
-1. Strong Scaling Speedup - Shows speedup vs number of GPUs (separated by image size)
-2. Strong Scaling Speedup Gradient - Shows gradient speedup vs number of GPUs (separated by image size)
-3. Strong Scaling Speedup Denoiser - Shows denoiser speedup vs number of GPUs (separated by image size)
-4. Parallel Efficiency - Shows efficiency vs number of GPUs (separated by image size)
+1. Strong Scaling Speedup - Shows speedup vs number of GPUs (with legend)
+2. Strong Scaling Speedup Gradient - Shows gradient speedup vs number of GPUs (no legend)
+3. Strong Scaling Speedup Denoiser - Shows denoiser speedup vs number of GPUs (no legend)
+4. Parallel Efficiency - Shows efficiency vs number of GPUs (with legend)
+5. Dashboard - Combined HTML page with all 4 visualizations in a 2x2 grid
 
 Usage
 -----
@@ -28,7 +29,8 @@ python analysis_plots/visualize_scaling.py outputs/scaling/highres_color_image
 Output Structure
 ----------------
 Visualizations are saved in: results_dir/scaling_result_name/
-where result_name is the name of the output directory (e.g., 'highres_color_image')
+- Individual plots: strong_scaling_speedup.html, parallel_efficiency.html, etc.
+- Combined dashboard: dashboard_scaling.html
 
 """
 
@@ -194,7 +196,7 @@ def calculate_scaling_metrics(parquet_df):
     return scaling_dict
 
 
-def plot_scaling_metric(scaling_dict, output_dir, metric_name, metric_col, title, y_label, y_range=None, text_format='{:.2f}x'):
+def plot_scaling_metric(scaling_dict, output_dir, metric_name, metric_col, title, y_label, y_range=None, text_format='{:.2f}x', show_legend=True):
     """
     Generic function to plot scaling metrics vs number of GPUs for each image size.
     
@@ -216,6 +218,8 @@ def plot_scaling_metric(scaling_dict, output_dir, metric_name, metric_col, title
         Y-axis range [min, max]
     text_format : str
         Format string for text labels (e.g., '{:.2f}x' or '{:.1f}%')
+    show_legend : bool
+        Whether to show legend (default: True)
     """
     fig = go.Figure()
     
@@ -239,7 +243,7 @@ def plot_scaling_metric(scaling_dict, output_dir, metric_name, metric_col, title
             text=text_labels,
             texttemplate='%{text}',
             textposition='top center',
-            textfont=dict(size=20, color=color),
+            textfont=dict(size=14, color=color),
             hovertemplate='<b>Image size:</b> ' + str(img_size) + '<br>' +
                           '<b>Config:</b> ' + scaling_df['config_label'] + '<br>' +
                           '<b>GPUs:</b> %{x}<br>' +
@@ -272,24 +276,31 @@ def plot_scaling_metric(scaling_dict, output_dir, metric_name, metric_col, title
         ))
     
     fig.update_layout(
-        title=dict(text=title, font=dict(size=38)),
+        title=dict(text=title, font=dict(size=20)),
         xaxis=dict(
             title='Number of GPUs',
             tickmode='array',
             tickvals=all_ngpus,
-            tickfont=dict(size=28)
+            tickfont=dict(size=14)
         ),
         yaxis=dict(
             title=y_label,
             range=y_range,
-            tickfont=dict(size=28)
+            tickfont=dict(size=14)
         ),
         hovermode='x unified',
         template='plotly_white',
+        margin=dict(l=50, r=20, t=60, b=50),
+        showlegend=show_legend,
         legend=dict(
-            font=dict(size=34)
-        ),
-        font=dict(size=28)
+            orientation='h',
+            yanchor='top',
+            y=-0.2,
+            xanchor='center',
+            x=0.5,
+            font=dict(size=12)
+        ) if show_legend else None,
+        font=dict(size=14)
     )
     
     output_path = Path(output_dir) / f'{metric_name}.html'
@@ -297,6 +308,124 @@ def plot_scaling_metric(scaling_dict, output_dir, metric_name, metric_col, title
     print(f"Saved: {output_path}")
     
     return fig
+
+
+def create_dashboard(results_path, result_name):
+    """Create an HTML dashboard combining all visualizations in a 2x2 grid."""
+    from datetime import datetime
+    
+    required_files = ['strong_scaling_speedup.html', 'strong_scaling_gradient_speedup.html',
+                     'strong_scaling_denoiser_speedup.html', 'parallel_efficiency.html']
+    
+    for file in required_files:
+        if not (results_path / file).exists():
+            print(f"Warning: Required file not found: {results_path / file}")
+            return None
+    
+    dashboard_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scaling Results Dashboard - {result_name}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ 
+            width: 100%; 
+            height: 100%; 
+            margin: 0; 
+            padding: 0; 
+            overflow-x: hidden;
+        }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: white;
+        }}
+        .container {{ 
+            width: 100%; 
+            min-height: 100%;
+            background: white;
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            padding: 20px; 
+            text-align: center;
+        }}
+        .header h1 {{ font-size: clamp(1.5em, 4vw, 2.5em); margin-bottom: 8px; font-weight: 700; }}
+        .header p {{ font-size: clamp(0.9em, 2vw, 1.2em); opacity: 0.95; }}
+        .timestamp {{ 
+            text-align: center; 
+            padding: 10px; 
+            background: #f8f9fa;
+            color: #6c757d; 
+            font-size: clamp(0.8em, 1.5vw, 0.9em);
+        }}
+        .dashboard-grid {{ 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 0;
+            width: 100%;
+        }}
+        .chart-container {{ 
+            width: 100%; 
+            height: 0;
+            padding-bottom: 90%; /* Aspect ratio control */
+            position: relative;
+            background: white; 
+            border: 1px solid #e0e0e0;
+        }}
+        iframe {{ 
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%; 
+            height: 100%; 
+            border: none; 
+            display: block; 
+        }}
+        .footer {{ 
+            text-align: center; 
+            padding: 15px; 
+            background: #f8f9fa; 
+            color: #6c757d; 
+            font-size: clamp(0.8em, 1.5vw, 0.9em); 
+        }}
+        
+        @media (max-width: 768px) {{
+            .dashboard-grid {{
+                grid-template-columns: 1fr;
+            }}
+            .chart-container {{
+                padding-bottom: 80%;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Scaling Results Dashboard</h1>
+            <p>{result_name.replace('_', ' ').title()}</p>
+        </div>
+        <div class="timestamp">Generated on {datetime.now().strftime('%B %d, %Y at %H:%M:%S')}</div>
+        <div class="dashboard-grid">
+            <div class="chart-container"><iframe src="strong_scaling_speedup.html" title="Strong Scaling Speedup"></iframe></div>
+            <div class="chart-container"><iframe src="parallel_efficiency.html" title="Parallel Efficiency"></iframe></div>
+            <div class="chart-container"><iframe src="strong_scaling_gradient_speedup.html" title="Gradient Speedup"></iframe></div>
+            <div class="chart-container"><iframe src="strong_scaling_denoiser_speedup.html" title="Denoiser Speedup"></iframe></div>
+        </div>
+        <div class="footer">Scaling Results Dashboard </div>
+    </div>
+</body>
+</html>"""
+    
+    dashboard_path = results_path / 'dashboard_scaling.html'
+    with open(dashboard_path, 'w') as f:
+        f.write(dashboard_html)
+    
+    print(f"Dashboard created: {dashboard_path}")
+    return dashboard_path
 
 
 def visualize_scaling(output_dir, results_dir='results_images'):
@@ -346,7 +475,8 @@ def visualize_scaling(output_dir, results_dir='results_images'):
         'strong_scaling_speedup',
         'speedup',
         'Strong Scaling: Speedup vs Number of GPUs',
-        'Speedup'
+        'Speedup',
+        show_legend=True
     )
     
     plot_scaling_metric(
@@ -354,7 +484,8 @@ def visualize_scaling(output_dir, results_dir='results_images'):
         'strong_scaling_gradient_speedup',
         'gradient_speedup',
         'Strong Scaling: Gradient Speedup vs Number of GPUs',
-        'Gradient Speedup'
+        'Gradient Speedup',
+        show_legend=False
     )
     
     plot_scaling_metric(
@@ -362,7 +493,8 @@ def visualize_scaling(output_dir, results_dir='results_images'):
         'strong_scaling_denoiser_speedup',
         'denoiser_speedup',
         'Strong Scaling: Denoiser Speedup vs Number of GPUs',
-        'Denoiser Speedup'
+        'Denoiser Speedup',
+        show_legend=False
     )
     
     plot_scaling_metric(
@@ -371,11 +503,20 @@ def visualize_scaling(output_dir, results_dir='results_images'):
         'efficiency',
         'Parallel Efficiency vs Number of GPUs',
         'Parallel Efficiency (%)',
-        y_range=[0, 110]
+        y_range=[0, 110],
+        show_legend=True
     )
     
     print("-" * 60)
+    print("Creating dashboard...")
+    print("-" * 60)
+    
+    dashboard_path = create_dashboard(results_path, result_name)
+    
+    print("-" * 60)
     print("All visualizations completed!")
+    if dashboard_path:
+        print(f"✨ View your dashboard at: {dashboard_path}")
 
 
 if __name__ == "__main__":

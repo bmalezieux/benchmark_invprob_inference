@@ -18,15 +18,6 @@ class GPUMetricsTracker:
     
     Designed for SLURM distributed environments where each process has
     its own assigned GPU(s). Supports per-step timing breakdown.
-    
-    Attributes
-    ----------
-    device : torch.device
-        Target device (e.g., 'cuda:0' or 'cpu')
-    has_cuda : bool
-        Whether CUDA is available
-    step_metrics : dict
-        Aggregated metrics (time, memory deltas) for each step
     """
     
     def __init__(self, device='cuda' if torch.cuda.is_available() else 'cpu'):
@@ -213,3 +204,35 @@ class GPUMetricsTracker:
             iteration_result[f'{step_name}_memory_peak_mb'] = metrics['memory_peak_mb']
         
         return iteration_result
+
+
+def save_result_per_rank(all_results, name, max_batch_size=0):
+    """Save GPU metrics per rank to CSV file.
+    
+    Parameters
+    ----------
+    all_results : list[dict]
+        List of dictionaries containing GPU metrics for each iteration.
+    name : str
+        Base name for the output file (should include rank information).
+    max_batch_size : int, optional
+        Max batch size to include in filename if > 0. Default: 0.
+    """
+    if not all_results:
+        return
+        
+    import pandas as pd
+    from pathlib import Path
+    
+    output_dir = Path("outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate filename with optional batch size suffix
+    if max_batch_size > 0:
+        csv_path = output_dir / f"{name}_bs{max_batch_size}_gpu_metrics.csv"
+    else:
+        csv_path = output_dir / f"{name}_gpu_metrics.csv"
+    
+    df = pd.DataFrame(all_results)
+    df.to_csv(csv_path, index=False)
+    print(f"Saved {len(all_results)} GPU metric records to {csv_path}")

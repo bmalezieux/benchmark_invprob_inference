@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 from deepinv.utils.demo import download_example, load_image
 from deepinv.models import DRUNet
-from .gpu_metrics import GPUMetricsTracker
+from .gpu_metrics import GPUMetricsTracker, save_result_per_rank
 
 
 def tensor_to_numpy(tensor):

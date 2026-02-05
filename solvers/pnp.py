@@ -8,7 +8,7 @@ from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
 
 from benchopt import BaseSolver
-from benchmark_utils import create_drunet_denoiser, GPUMetricsTracker
+from benchmark_utils import create_drunet_denoiser, GPUMetricsTracker, save_result_per_rank
 
 
 def compute_step_size_from_operator(
@@ -330,16 +330,8 @@ class Solver(BaseSolver):
                     torch.cuda.synchronize(self.device)
                 
                 # Capture iteration metrics after both steps complete
-                self._capture_iteration_result()
-
-    def _capture_iteration_result(self):
-        """Capture current iteration's metrics and append to results list."""
-        if self.gpu_tracker is None:
-            return
-        
-        # Capture only GPU/performance metrics per iteration
-        iteration_result = self.gpu_tracker.capture_iteration_result()
-        self.all_results.append(iteration_result)
+                iteration_result = self.gpu_tracker.capture_iteration_result()
+                self.all_results.append(iteration_result)
 
     def _run_with_context(self, cb, ctx=None):
         """Run PnP with optional distributed context.
@@ -426,29 +418,8 @@ class Solver(BaseSolver):
             ctx.barrier()
         
         # Save results to file (both distributed and single-GPU modes)
-        self._save_result()
+        save_result_per_rank(self.all_results, self.name, self.max_batch_size)
 
-    def _save_result(self):
-        """Save GPU metrics per rank."""
-        if not self.all_results:
-            return
-            
-        import pandas as pd
-        from pathlib import Path
-        
-        output_dir = Path("outputs")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Use self.name which already contains timestamp and rank/single suffix
-        if self.max_batch_size > 0:
-            csv_path = output_dir / f"{self.name}_bs{self.max_batch_size}_gpu_metrics.csv"
-        else:
-            csv_path = output_dir / f"{self.name}_gpu_metrics.csv"
-        
-        df = pd.DataFrame(self.all_results)
-        df.to_csv(csv_path, index=False)
-        print(f"Saved {len(self.all_results)} GPU metric records to {csv_path}")
-    
     def get_result(self):
         """Return the reconstruction result.
         

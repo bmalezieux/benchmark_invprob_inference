@@ -1,4 +1,4 @@
-"""
+"""  
 Visualization script for detailed per-rank GPU metrics.
 
 This script reads CSV files containing per-rank GPU metrics from benchmark outputs 
@@ -10,6 +10,7 @@ The script generates the following visualizations:
 2. Denoiser Time by Rank - Shows average denoiser computation time for each rank
 3. GPU Max Memory for Gradient by Rank - Shows maximum GPU memory allocated during gradient computation for each rank
 4. GPU Max Memory for Denoiser by Rank - Shows maximum GPU memory allocated during denoiser computation for each rank
+5. Dashboard - Combined HTML page with all 4 visualizations in a 2x2 grid
 
 Usage
 -----
@@ -29,7 +30,8 @@ python analysis_plots/visualize_rank_details.py outputs/tomography_2d
 Output Structure
 ----------------
 Visualizations are saved in: results_dir/result_name/
-where result_name is the name of the output directory (e.g., 'highres_color_image')
+- Individual plots: gpu_gradient_time_by_rank.html, gpu_denoiser_time_by_rank.html, etc.
+- Combined dashboard: dashboard_rank_details.html
 """
 
 import pandas as pd
@@ -299,24 +301,140 @@ def plot_metric_by_rank(csv_groups, output_dir, metric_config):
             ))
     
     fig.update_layout(
-        title=dict(text=metric_config['title'], font=dict(size=38)),
+        title=dict(text=metric_config['title'], font=dict(size=20)),
         xaxis=dict(
             title='Configuration',
             tickmode='array',
             tickvals=x_tick_vals,
-            ticktext=x_tick_text
+            ticktext=x_tick_text,
+            tickfont=dict(size=14)
         ),
         yaxis_title=metric_config['ylabel'],
         template='plotly_white',
-        legend=dict(
-            font=dict(size=28)
-        ),
-        font=dict(size=28)
+        margin=dict(l=50, r=20, t=60, b=80),
+        showlegend=False,
+        font=dict(size=14)
     )
     
     output_path = Path(output_dir) / metric_config['filename']
     fig.write_html(str(output_path))
     print(f"Saved: {output_path}")
+
+
+def create_dashboard(results_path, result_name):
+    """Create an HTML dashboard combining all visualizations in a 2x2 grid."""
+    required_files = ['gpu_gradient_time_by_rank.html', 'gpu_denoiser_time_by_rank.html',
+                     'gpu_gradient_memory_by_rank.html', 'gpu_denoiser_memory_by_rank.html']
+    
+    for file in required_files:
+        if not (results_path / file).exists():
+            print(f"Warning: Required file not found: {results_path / file}")
+            return None
+    
+    dashboard_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Per-Rank GPU Metrics Dashboard - {result_name}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ 
+            width: 100%; 
+            height: 100%; 
+            margin: 0; 
+            padding: 0; 
+            overflow-x: hidden;
+        }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: white;
+        }}
+        .container {{ 
+            width: 100%; 
+            min-height: 100%;
+            background: white;
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            padding: 20px; 
+            text-align: center;
+        }}
+        .header h1 {{ font-size: clamp(1.5em, 4vw, 2.5em); margin-bottom: 8px; font-weight: 700; }}
+        .header p {{ font-size: clamp(0.9em, 2vw, 1.2em); opacity: 0.95; }}
+        .timestamp {{ 
+            text-align: center; 
+            padding: 10px; 
+            background: #f8f9fa;
+            color: #6c757d; 
+            font-size: clamp(0.8em, 1.5vw, 0.9em);
+        }}
+        .dashboard-grid {{ 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 0;
+            width: 100%;
+        }}
+        .chart-container {{ 
+            width: 100%; 
+            height: 0;
+            padding-bottom: 90%; /* Aspect ratio control */
+            position: relative;
+            background: white; 
+            border: 1px solid #e0e0e0;
+        }}
+        iframe {{ 
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%; 
+            height: 100%; 
+            border: none; 
+            display: block; 
+        }}
+        .footer {{ 
+            text-align: center; 
+            padding: 15px; 
+            background: #f8f9fa; 
+            color: #6c757d; 
+            font-size: clamp(0.8em, 1.5vw, 0.9em); 
+        }}
+        
+        @media (max-width: 768px) {{
+            .dashboard-grid {{
+                grid-template-columns: 1fr;
+            }}
+            .chart-container {{
+                padding-bottom: 80%;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Per-Rank GPU Metrics Dashboard</h1>
+            <p>{result_name.replace('_', ' ').title()}</p>
+        </div>
+        <div class="timestamp">Generated on {datetime.now().strftime('%B %d, %Y at %H:%M:%S')}</div>
+        <div class="dashboard-grid">
+            <div class="chart-container"><iframe src="gpu_gradient_time_by_rank.html" title="Gradient Time"></iframe></div>
+            <div class="chart-container"><iframe src="gpu_denoiser_time_by_rank.html" title="Denoiser Time"></iframe></div>
+            <div class="chart-container"><iframe src="gpu_gradient_memory_by_rank.html" title="Gradient Memory"></iframe></div>
+            <div class="chart-container"><iframe src="gpu_denoiser_memory_by_rank.html" title="Denoiser Memory"></iframe></div>
+        </div>
+        <div class="footer">Per-Rank GPU Metrics Dashboard | Generated by visualize_rank_details.py</div>
+    </div>
+</body>
+</html>"""
+    
+    dashboard_path = results_path / 'dashboard_rank_details.html'
+    with open(dashboard_path, 'w') as f:
+        f.write(dashboard_html)
+    
+    print(f"Dashboard created: {dashboard_path}")
+    return dashboard_path
 
 
 def visualize_rank_details(output_dir, results_dir='results_images'):
@@ -391,7 +509,15 @@ def visualize_rank_details(output_dir, results_dir='results_images'):
     })
     
     print("-" * 60)
+    print("Creating dashboard...")
+    print("-" * 60)
+    
+    dashboard_path = create_dashboard(results_path, result_name)
+    
+    print("-" * 60)
     print("All visualizations completed!")
+    if dashboard_path:
+        print(f"✨ View your dashboard at: {dashboard_path}")
 
 
 if __name__ == "__main__":
