@@ -71,7 +71,7 @@ class Objective(BaseObjective):
             max_pixel=self.max_pixel,
         )
 
-    def evaluate_result(self, reconstruction, name):
+    def evaluate_result(self, reconstruction, name, **kwargs):
         """Compute the objective value(s) given the output of a solver.
 
         Parameters
@@ -80,12 +80,22 @@ class Objective(BaseObjective):
             Reconstructed image from solver.
         name : str
             Name identifier for the solver/configuration.
+        **kwargs : dict
+            Optional GPU and step metrics including:
+            - gpu_memory_allocated_mb, gpu_memory_reserved_mb, 
+              gpu_memory_max_allocated_mb, gpu_available_memory_mb
+            - gradient_time_sec, gradient_memory_allocated_mb,
+              gradient_memory_reserved_mb, gradient_memory_delta_mb,
+              gradient_memory_peak_mb
+            - denoise_time_sec, denoise_memory_allocated_mb,
+              denoise_memory_reserved_mb, denoise_memory_delta_mb,
+              denoise_memory_peak_mb
             
         Returns
         -------
         dict
             Dictionary with 'value' (negative PSNR for minimization),
-            'psnr', and 'ssim' metrics.
+            'psnr', and optional GPU/step metrics.
         """
         with torch.no_grad():
             # Ensure reconstruction is on the same device as ground truth
@@ -120,9 +130,14 @@ class Objective(BaseObjective):
             )
 
         # Return value (primary metric for stopping criterion) and additional metrics
-        # Use PSNR as the primary metric (higher is better)
-        return dict(value=-psnr, psnr=psnr)
-        # return dict(value=-psnr, psnr=psnr, ssim=ssim)
+        result = dict(value=-psnr, psnr=psnr)
+        
+        # Add all non-None metrics from kwargs to result
+        for key, value in kwargs.items():
+            if value is not None:
+                result[key] = value
+        
+        return result
 
     def get_one_result(self):
         """Return one solution for which the objective can be evaluated.

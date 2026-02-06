@@ -8,7 +8,7 @@ from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
 
 from benchopt import BaseSolver
-from benchmark_utils import create_drunet_denoiser
+from benchmark_utils import create_drunet_denoiser, GPUMetricsTracker, save_result_per_rank
 
 
 def compute_step_size_from_operator(
@@ -146,13 +146,23 @@ class Solver(BaseSolver):
         self.distributed_mode = self.world_size > 1
         self.reconstruction = torch.zeros(self.ground_truth_shape)
         
+        # Initialize GPU metrics tracker (device will be set in _run_with_context)
+        self.gpu_tracker = None
+        
+        # Initialize results storage for per-iteration tracking
+        self.all_results = []
+        
         # Generate name based on whether using slurm or torchrun
-        if hasattr(self, 'slurm_tasks_per_node') and self.slurm_tasks_per_node > 1:
-            self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + f"{self.slurm_nodes}n{self.slurm_tasks_per_node}t"
+        if hasattr(self, 'slurm_ntasks_per_node') and self.slurm_ntasks_per_node > 1:
+            self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + f"{self.slurm_nodes}n{self.slurm_ntasks_per_node}t"
         elif hasattr(self, 'torchrun_nproc_per_node') and self.torchrun_nproc_per_node > 1:
             self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + f"torchrun_{self.torchrun_nproc_per_node}proc"
         else:
             self.name = self.name_prefix + datetime.now().strftime("_%Y%m%d_%H%M%S_") + "_single"
+        
+        # Add rank to name in distributed mode
+        if self.distributed_mode:
+            self.name = self.name + f"_rank{int(os.environ.get('RANK', 0))}"
     
     def run(self, cb):
         """Run the PnP algorithm with callback for iteration control.
@@ -283,35 +293,45 @@ class Solver(BaseSolver):
                 if self.distributed_mode and self.ctx is not None:
                     # Synchronize stopping criterion
                     decision = torch.tensor([float(keep_going)], device=self.device)
-                    self.ctx.broadcast_(decision, src=0)
+                    self.ctx.broadcast(decision, src=0)
                     keep_going = bool(decision.item())
 
                 if not keep_going:
                     break
+                
+                # Reset iteration tracking for new iteration
+                self.gpu_tracker.reset_iteration_tracking()
 
-                # Data fidelity gradient step
-                grad = data_fidelity.grad(self.reconstruction, measurements, physics)
+                # ===== GRADIENT STEP =====
+                with self.gpu_tracker.track_step('gradient'):
+                    # Data fidelity gradient step
+                    grad = data_fidelity.grad(self.reconstruction, measurements, physics)
+                    # Gradient descent step
+                    self.reconstruction = self.reconstruction - step_size * grad
 
-                # Gradient descent step
-                self.reconstruction = self.reconstruction - step_size * grad
+                # ===== DENOISING STEP =====
+                with self.gpu_tracker.track_step('denoise'):
+                    # Denoising step
+                    if self.denoiser_lambda_relaxation is None:
+                        self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                    else:
+                        denoised_reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
+                        lamda = self.denoiser_lambda_relaxation
+                        alpha = (step_size * lamda) / (1 + step_size * lamda)
+                        self.reconstruction = (1 - alpha) * self.reconstruction + alpha * denoised_reconstruction
 
-                # Denoising step
-                if self.denoiser_lambda_relaxation is None:
-                    self.reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
-                else:
-                    denoised_reconstruction = prior.prox(self.reconstruction, sigma_denoiser=self.denoiser_sigma)
-                    lamda = self.denoiser_lambda_relaxation
-                    alpha = (step_size * lamda) / (1 + step_size * lamda)
-                    self.reconstruction = (1 - alpha) * self.reconstruction + alpha * denoised_reconstruction
-
-                # Clip reconstruction to valid range after denoising
-                if self.clip_range is not None:
-                    self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
+                    # Clip reconstruction to valid range after denoising
+                    if self.clip_range is not None:
+                        self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
 
                 # Synchronize all CUDA operations and distributed processes
                 # This ensures accurate timing measurements
                 if self.device.type == 'cuda':
                     torch.cuda.synchronize(self.device)
+                
+                # Capture iteration metrics after both steps complete
+                iteration_result = self.gpu_tracker.capture_iteration_result()
+                self.all_results.append(iteration_result)
 
     def _run_with_context(self, cb, ctx=None):
         """Run PnP with optional distributed context.
@@ -328,6 +348,9 @@ class Solver(BaseSolver):
             self.device = ctx.device
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Initialize GPU metrics tracker
+        self.gpu_tracker = GPUMetricsTracker(device=self.device)
 
         # Move measurement to correct device
         if hasattr(self.measurement, 'to'):
@@ -361,23 +384,27 @@ class Solver(BaseSolver):
         
         # Setup components
         prior, data_fidelity = self._setup_components(self.device, ctx)
-        cb()
+        #cb()
         print("Components set up.")
         
         # Compute step size
         step_size = self._compute_step_size(physics, self.device)
-        cb()
+        #cb()
         print("Step size computed:", step_size)
 
         # Initialize reconstruction
         self.reconstruction = self._initialize_reconstruction(physics, self.measurement, self.device)
-        cb()
+        #cb()
         print("Reconstruction initialized.")
         
         # Clip initial reconstruction if requested
         if self.clip_range is not None:
             self.reconstruction = torch.clamp(self.reconstruction, self.clip_range[0], self.clip_range[1])
 
+        # Synchronize before capturing initial state
+        if self.device.type == 'cuda':
+            torch.cuda.synchronize(self.device)
+            
         print("Starting PnP iterations.")
 
         # Run PnP iterations
@@ -389,13 +416,38 @@ class Solver(BaseSolver):
             torch.cuda.synchronize(self.device)
         if ctx is not None:
             ctx.barrier()
+        
+        # Save results to file (both distributed and single-GPU modes)
+        save_result_per_rank(self.all_results, self.name, self.max_batch_size)
 
     def get_result(self):
         """Return the reconstruction result.
         
         Returns:
-            dict: Dictionary with 'reconstruction' key
+            dict: Dictionary with 'reconstruction' key, GPU memory snapshot,
+            and per-step metrics (gradient and denoise timing/memory)
         """
-        return dict(reconstruction=self.reconstruction, name=self.name)
+        result = dict(reconstruction=self.reconstruction, name=self.name)
+        
+        # Add GPU memory snapshot
+        if self.gpu_tracker is not None:
+            gpu_mem = self.gpu_tracker.get_gpu_memory_snapshot()
+            result.update({
+                'gpu_memory_allocated_mb': gpu_mem['allocated_mb'],
+                'gpu_memory_reserved_mb': gpu_mem['reserved_mb'],
+                'gpu_memory_max_allocated_mb': gpu_mem['max_allocated_mb'],
+                'gpu_available_memory_mb': gpu_mem['available_mb'],
+            })
+            
+            # Add per-step metrics
+            all_step_metrics = self.gpu_tracker.get_all_step_metrics()
+            for step_name, metrics in all_step_metrics.items():
+                result[f'{step_name}_time_sec'] = metrics['time_sec']
+                result[f'{step_name}_memory_allocated_mb'] = metrics['memory_allocated_mb']
+                result[f'{step_name}_memory_reserved_mb'] = metrics['memory_reserved_mb']
+                result[f'{step_name}_memory_delta_mb'] = metrics['memory_delta_mb']
+                result[f'{step_name}_memory_peak_mb'] = metrics['memory_peak_mb']
+        
+        return result
 
     def get_next(self, stop_val): return stop_val + 1
