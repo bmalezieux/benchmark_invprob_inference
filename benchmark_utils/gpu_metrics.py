@@ -20,7 +20,7 @@ class GPUMetricsTracker:
     its own assigned GPU(s). Supports per-step timing breakdown.
     """
     
-    def __init__(self, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, device=None):
         """Initialize GPU metrics tracker.
         
         Parameters
@@ -28,7 +28,9 @@ class GPUMetricsTracker:
         device : torch.device or str, optional
             Device to track. Default: CUDA if available, else CPU.
         """
-        if isinstance(device, str):
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        elif isinstance(device, str):
             self.device = torch.device(device)
         else:
             self.device = device
