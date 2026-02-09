@@ -19,6 +19,7 @@ class Dataset(BaseDataset):
     """Simple simulated dataset with synthetic image and blur operators."""
     
     name = 'simulated'
+    requirements = ["numpy", "pip::git+https://github.com/deepinv/deepinv.git@main"]
 
     parameters = {
         'image_size': [256],

@@ -78,6 +78,8 @@ class Solver(BaseSolver):
     """Plug-and-Play (PnP) solver with optional distributed support."""
     
     name = 'PnP'
+
+    requirements = ["pip::torch", "numpy", "pip::git+https://github.com/deepinv/deepinv.git@main"]
     
     # Use callback sampling strategy for transparent iteration control
     sampling_strategy = 'callback'

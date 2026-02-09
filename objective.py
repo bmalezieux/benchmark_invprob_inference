@@ -149,4 +149,7 @@ class Objective(BaseObjective):
         dict
             Dictionary with a noisy version of ground truth.
         """
-        return dict(reconstruction=self.ground_truth + self.ground_truth.std())
+        return dict(
+            reconstruction=self.ground_truth + self.ground_truth.std(),
+            name="test_result"
+        )

@@ -20,6 +20,7 @@ from benchopt import config
 class Dataset(BaseDataset):
     # Name of the Dataset, used to select it in the CLI
     name = 'tomography_3d'
+    requirements = ["torch", "numpy", "pip::git+https://github.com/deepinv/deepinv.git@main"]
 
     parameters = {
         'num_operators': [4],

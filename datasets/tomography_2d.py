@@ -88,6 +88,7 @@ def load_shepp_logan_image(img_size: int = 256, grayscale: bool = True, device: 
 class Dataset(BaseDataset):
     # Name of the Dataset, used to select it in the CLI
     name = 'tomography_2d'
+    requirements = ["torch", "numpy", "pip::git+https://github.com/deepinv/deepinv.git@main"]
 
     parameters = {
         'img_size': [512],

@@ -20,6 +20,7 @@ from benchmark_utils import load_cached_example, save_measurements_figure
 class Dataset(BaseDataset):
     # Name of the Dataset, used to select it in the CLI
     name = 'highres_color_image'
+    requirements = ["torch", "numpy", "pip::git+https://github.com/deepinv/deepinv.git@main"]
 
     parameters = {
         'image_size': [512, 1024, 2048],
