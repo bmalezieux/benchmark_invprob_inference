@@ -1,0 +1,23 @@
+[project]
+name = "benchmark-invprob-inference"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "benchopt>=1.7.0",
+    "deepinv>=0.3.7",
+    "numpy>=2.4.1",
+    "torch>=2.7.0",
+]
+
+[dependency-groups]
+dev = [
+    "sphinx>=9.1.0",
+    "sphinx-autodoc-typehints>=3.6.2",
+    "sphinx-gallery>=0.20.0",
+    "sphinx-rtd-theme>=3.1.0",
+]
+
+[tool.uv.sources]
+deepinv = { git = "https://github.com/deepinv/deepinv.git" }
