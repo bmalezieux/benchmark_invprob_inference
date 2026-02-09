@@ -45,7 +45,7 @@ jobs:
       run: |
         conda info
         mamba install -yq pip
-        pip install -U benchopt
+        pip install -U "benchopt[test]"
         
         # Install benchmark dependencies (deepinv, torch, etc.) from pyproject.toml
         pip install -e .
