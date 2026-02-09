@@ -7,16 +7,16 @@ requires-python = ">=3.10"
 dependencies = [
     "benchopt>=1.7.0",
     "deepinv>=0.3.7",
-    "numpy>=2.4.1",
+    "numpy>=2.2.0",
     "torch>=2.7.0",
 ]
 
 [dependency-groups]
 dev = [
-    "sphinx>=9.1.0",
-    "sphinx-autodoc-typehints>=3.6.2",
-    "sphinx-gallery>=0.20.0",
-    "sphinx-rtd-theme>=3.1.0",
+    "sphinx>=9.1.0; python_version >= '3.12'",
+    "sphinx-autodoc-typehints>=3.6.2; python_version >= '3.12'",
+    "sphinx-gallery>=0.20.0; python_version >= '3.12'",
+    "sphinx-rtd-theme>=3.1.0; python_version >= '3.12'",
 ]
 
 [tool.uv.sources]
