@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "benchopt>=1.7.0",
-    "deepinv>=0.3.7",
+    "deepinv @ git+https://github.com/deepinv/deepinv.git@main",
     "numpy>=2.2.0",
     "torch>=2.7.0",
 ]
