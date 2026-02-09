@@ -21,3 +21,6 @@ dev = [
 
 [tool.uv.sources]
 deepinv = { git = "https://github.com/deepinv/deepinv.git" }
+
+[tool.setuptools]
+packages = ["benchmark_utils"]
