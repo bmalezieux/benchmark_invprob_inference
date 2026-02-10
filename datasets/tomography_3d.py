@@ -3,38 +3,45 @@
 This dataset uses 3D CT data from HuggingFace (Walnut cone-beam CT) and creates
 multiple tomography operators with ASTRA for distributed reconstruction.
 """
-import os
-import torch
-import numpy as np
-from pathlib import Path
-from typing import Optional, Dict
 
+import os
+from pathlib import Path
+from typing import Dict, Optional
+
+import torch
+from benchopt import BaseDataset, config
+from deepinv.distributed import DistributedContext
 from deepinv.physics import TomographyWithAstra
 from deepinv.utils.demo import load_torch_url
-from deepinv.distributed import DistributedContext
-
-from benchopt import BaseDataset
-from benchopt import config
 
 
 class Dataset(BaseDataset):
     # Name of the Dataset, used to select it in the CLI
-    name = 'tomography_3d'
-    requirements = ["torch", "numpy", "pip::git+https://github.com/deepinv/deepinv.git@main"]
+    name = "tomography_3d"
+    requirements = [
+        "torch",
+        "numpy",
+        "pip::git+https://github.com/deepinv/deepinv.git@main",
+    ]
 
     parameters = {
-        'num_operators': [4],
-        'num_projections': [100],
-        'geometry_type': ['conebeam'],
-        'use_dataset_sinogram': [True],
-        'seed': [42],
+        "num_operators": [4],
+        "num_projections": [100],
+        "geometry_type": ["conebeam"],
+        "use_dataset_sinogram": [True],
+        "seed": [42],
     }
 
-    def __init__(self, num_operators=2, num_projections=100, 
-                 geometry_type='conebeam',
-                 use_dataset_sinogram=True, seed=42):
+    def __init__(
+        self,
+        num_operators=2,
+        num_projections=100,
+        geometry_type="conebeam",
+        use_dataset_sinogram=True,
+        seed=42,
+    ):
         """Initialize the dataset.
-        
+
         Parameters
         ----------
         num_operators : int
@@ -54,16 +61,18 @@ class Dataset(BaseDataset):
         self.use_dataset_sinogram = use_dataset_sinogram
         self.seed = seed
 
-    def _load_or_download_dataset(self, data_dir: Path, filename: str = "Walnut-CBCT_8.pt") -> Dict[str, torch.Tensor]:
+    def _load_or_download_dataset(
+        self, data_dir: Path, filename: str = "Walnut-CBCT_8.pt"
+    ) -> Dict[str, torch.Tensor]:
         """Load 3D CT dataset from cache or download from HuggingFace.
-        
+
         Parameters
         ----------
         data_dir : Path
             Directory to store cached data.
         filename : str
             Name of the cached file.
-            
+
         Returns
         -------
         dict
@@ -79,7 +88,7 @@ class Dataset(BaseDataset):
             print(f"Loading cached 3D CT data from {cache_path}")
             dataset = torch.load(cache_path)
         else:
-            print(f"Downloading 3D CT data from HuggingFace...")
+            print("Downloading 3D CT data from HuggingFace...")
             url = "https://huggingface.co/datasets/romainvo/ct_examples/resolve/main/Walnut-CBCT_8.pt"
             dataset = load_torch_url(url)
             print(f"Saving 3D CT data to {cache_path}")
@@ -87,12 +96,14 @@ class Dataset(BaseDataset):
 
         return dataset
 
-    def _create_operator_factory(self, dataset: Dict, img_shape: tuple, device_str: str):
+    def _create_operator_factory(
+        self, dataset: Dict, img_shape: tuple, device_str: str
+    ):
         """Create a factory function for 3D tomography operators.
-        
+
         ASTRA operators must be instantiated on the correct device,
         so we return a factory that creates them on demand.
-        
+
         Parameters
         ----------
         dataset : dict
@@ -101,35 +112,35 @@ class Dataset(BaseDataset):
             Shape of the ground truth volume (D, H, W).
         device_str : str
             Device string for reference (not used in factory).
-            
+
         Returns
         -------
         callable
             Factory function(index, device, shared) -> TomographyWithAstra operator.
         """
         trajectory = dataset["vecs"]
-        
+
         # Subsample trajectory if needed
         num_angles_total = trajectory.shape[0]
         if self.num_projections < num_angles_total:
             sparse_indexes = torch.linspace(
-                0, num_angles_total - 1, 
-                steps=self.num_projections, 
-                dtype=torch.long
+                0, num_angles_total - 1, steps=self.num_projections, dtype=torch.long
             )
             trajectory = trajectory[sparse_indexes]
-            print(f"Subsampling trajectory: using {self.num_projections} angles out of {num_angles_total} available")
-        
+            print(
+                f"Subsampling trajectory: using {self.num_projections} angles out of {num_angles_total} available"
+            )
+
         num_measurement_angles = trajectory.shape[0]
         angles_per_operator = num_measurement_angles // self.num_operators
-        
+
         # Detector size from dataset (typical for Walnut dataset)
         n_detector_pixels = (972, 768)  # (horizontal, vertical)
         object_spacing = (0.1, 0.1, 0.1)  # mm
-        
+
         def factory(index: int, device: torch.device, shared: Optional[Dict] = None):
             """Create a 3D tomography operator for the given index and device.
-            
+
             Parameters
             ----------
             index : int
@@ -138,7 +149,7 @@ class Dataset(BaseDataset):
                 Device to create the operator on.
             shared : dict, optional
                 Shared data dictionary (not used here).
-                
+
             Returns
             -------
             TomographyWithAstra
@@ -150,12 +161,14 @@ class Dataset(BaseDataset):
                 end_idx = num_measurement_angles
             else:
                 end_idx = (index + 1) * angles_per_operator
-            
+
             trajectory_subset = trajectory[start_idx:end_idx]
             num_angles_subset = end_idx - start_idx
-            
-            print(f"Physics factory: creating operator {index} with {num_angles_subset} angles [{start_idx}:{end_idx}]")
-            
+
+            print(
+                f"Physics factory: creating operator {index} with {num_angles_subset} angles [{start_idx}:{end_idx}]"
+            )
+
             physics = TomographyWithAstra(
                 img_size=img_shape,
                 num_angles=num_angles_subset,
@@ -166,31 +179,31 @@ class Dataset(BaseDataset):
                 normalize=False,
                 device=device,
             )
-            
+
             # Store metadata for debugging
             physics._angle_range = (start_idx, end_idx)
             physics._operator_idx = index
-            
+
             return physics
-        
+
         return factory
 
     def _create_measurements_factory(self, dataset: Dict, device_str: str):
         """Create a factory function for measurements.
-        
+
         This factory splits the full sinogram according to angle ranges.
-        
+
         ASTRA Shape Convention:
         The ASTRA backend expects input with shape:
             (batch, channels, detector_h, angles, detector_v)
-        
+
         Parameters
         ----------
         dataset : dict
             Dataset dictionary with sinogram.
         device_str : str
             Device string for reference.
-            
+
         Returns
         -------
         callable
@@ -198,43 +211,48 @@ class Dataset(BaseDataset):
         """
         if self.use_dataset_sinogram:
             sinogram = dataset["sinogram"]
-            
-            print(f"\n=== Loading Sinogram from Dataset ===")
+
+            print("\n=== Loading Sinogram from Dataset ===")
             print(f"Original sinogram shape: {sinogram.shape}")
-            
+
             # Subsample sinogram if needed
             num_angles_total = sinogram.shape[0]
             if self.num_projections < num_angles_total:
                 sparse_indexes = torch.linspace(
-                    0, num_angles_total - 1, 
-                    steps=self.num_projections, 
-                    dtype=torch.long
+                    0,
+                    num_angles_total - 1,
+                    steps=self.num_projections,
+                    dtype=torch.long,
                 )
                 sinogram = sinogram[sparse_indexes]
                 print(f"Subsampling sinogram: using {self.num_projections} angles")
-            
+
             # Convert to tensor and permute to ASTRA format
             # Original: (angles, detector_h, detector_v)
             # Target: (batch, channels, detector_h, angles, detector_v)
             device = torch.device(device_str)
             sinogram_tensor = sinogram.float().to(device)
             sinogram_tensor = sinogram_tensor.permute(1, 0, 2)  # (h, angles, v)
-            sinogram_tensor = sinogram_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, h, angles, v)
-            
+            sinogram_tensor = sinogram_tensor.unsqueeze(0).unsqueeze(
+                0
+            )  # (1, 1, h, angles, v)
+
             # Make contiguous after permute to avoid ASTRA contiguity errors
             sinogram_tensor = sinogram_tensor.contiguous()
-            
+
             print(f"Final sinogram tensor shape: {sinogram_tensor.shape}")
-            print(f"  Format: (batch, channels, detector_h, angles, detector_v)")
+            print("  Format: (batch, channels, detector_h, angles, detector_v)")
             print(f"  Is contiguous: {sinogram_tensor.is_contiguous()}")
-            print(f"=== Sinogram Loading Complete ===\n")
-            
+            print("=== Sinogram Loading Complete ===\n")
+
             num_angles = sinogram_tensor.shape[3]
             angles_per_op = num_angles // self.num_operators
-            
-            def factory(index: int, device: torch.device, shared: Optional[Dict] = None):
+
+            def factory(
+                index: int, device: torch.device, shared: Optional[Dict] = None
+            ):
                 """Return a slice of the dataset sinogram.
-                
+
                 Parameters
                 ----------
                 index : int
@@ -243,7 +261,7 @@ class Dataset(BaseDataset):
                     Device to place the measurement on.
                 shared : dict, optional
                     Shared data dictionary (not used here).
-                    
+
                 Returns
                 -------
                 torch.Tensor
@@ -254,20 +272,24 @@ class Dataset(BaseDataset):
                     end_idx = num_angles
                 else:
                     end_idx = (index + 1) * angles_per_op
-                
+
                 # Slice along the angles dimension (dim 3)
                 measurement = sinogram_tensor[:, :, :, start_idx:end_idx, :].to(device)
-                
+
                 # Ensure contiguity for ASTRA (slicing can break contiguity)
                 measurement = measurement.contiguous()
-                
-                print(f"Measurements factory: operator {index} gets angles [{start_idx}:{end_idx}], shape {measurement.shape}")
-                
+
+                print(
+                    f"Measurements factory: operator {index} gets angles [{start_idx}:{end_idx}], shape {measurement.shape}"
+                )
+
                 return measurement
-            
+
             return factory
         else:
-            raise NotImplementedError("Forward pass generation not yet implemented for benchopt datasets")
+            raise NotImplementedError(
+                "Forward pass generation not yet implemented for benchopt datasets"
+            )
 
     def get_data(self):
         """Load the data for this Dataset.
@@ -280,10 +302,15 @@ class Dataset(BaseDataset):
             # Try to initialize
             try:
                 import submitit
-                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+
+                submitit.helpers.TorchDistributedEnvironment().export(
+                    set_cuda_visible_devices=False
+                )
                 print("Initialized distributed environment via submitit in dataset")
             except ImportError:
-                print("submitit not installed, dataset will run in non-distributed mode")
+                print(
+                    "submitit not installed, dataset will run in non-distributed mode"
+                )
             except RuntimeError as e:
                 # This could be SLURM not available or other runtime issues
                 error_msg = str(e).lower()
@@ -292,7 +319,9 @@ class Dataset(BaseDataset):
                 else:
                     print(f"RuntimeError initializing submitit in dataset: {e}")
         else:
-            print(f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}")
+            print(
+                f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}"
+            )
 
         # Use cleanup=False to keep process group alive for solver
         # Solver will handle cleanup when it's done
@@ -301,55 +330,50 @@ class Dataset(BaseDataset):
 
             # Setup device
             device = ctx.device
-            
+
             # Get data directory
             data_path = config.get_data_path(key="tomography_3d")
-            
 
             dataset = self._load_or_download_dataset(
-                data_dir=Path(data_path),
-                filename="Walnut-CBCT_8.pt"
+                data_dir=Path(data_path), filename="Walnut-CBCT_8.pt"
             )
 
             # Extract ground truth volume
             ref_rc = dataset["dense_reconstruction"]
             ground_truth = ref_rc.float().to(device)
-            
+
             # Add batch and channel dimensions: (D, H, W) -> (1, 1, D, H, W)
             if ground_truth.dim() == 3:
                 ground_truth = ground_truth.unsqueeze(0).unsqueeze(0)
-            
+
             img_shape = ground_truth.shape[-3:]  # (D, H, W)
-            
+
             print(f"Loaded 3D ground truth with shape: {ground_truth.shape}")
             print(f"Image shape (D, H, W): {img_shape}")
-        
+
             # Create measurements factory
             measurements_factory = self._create_measurements_factory(
-                dataset=dataset,
-                device_str=str(device)
+                dataset=dataset, device_str=str(device)
             )
-            
+
             # For benchopt, we need to return a list of measurements
             # Create them by calling the factory for each operator
             measurement_list = []
             for i in range(self.num_operators):
                 meas = measurements_factory(i, device, None)
                 measurement_list.append(meas)
-            
+
             print(f"Created {len(measurement_list)} measurements")
-            
+
             # Ensure data is on correct device
             ground_truth = ground_truth.to(device)
             measurement_list = [m.to(device) for m in measurement_list]
-            
+
             # Create operator factory (always needed, doesn't use cached data)
             physics_factory = self._create_operator_factory(
-                dataset=dataset,
-                img_shape=img_shape,
-                device_str=str(device)
+                dataset=dataset, img_shape=img_shape, device_str=str(device)
             )
-        
+
         return dict(
             ground_truth=ground_truth,
             measurement=measurement_list,

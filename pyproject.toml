@@ -13,11 +13,25 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "black",
+    "ruff",
     "sphinx>=9.1.0; python_version >= '3.12'",
     "sphinx-autodoc-typehints>=3.6.2; python_version >= '3.12'",
     "sphinx-gallery>=0.20.0; python_version >= '3.12'",
     "sphinx-rtd-theme>=3.1.0; python_version >= '3.12'",
 ]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
+ignore = ["E501"]
 
 [tool.uv.sources]
 deepinv = { git = "https://github.com/deepinv/deepinv.git" }

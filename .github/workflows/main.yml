@@ -50,6 +50,12 @@ jobs:
         
         # Install benchmark dependencies (deepinv, torch, etc.) from pyproject.toml
         pip install -e .
+        pip install black ruff
+
+    - name: Lint with black and ruff
+      run: |
+        black --check benchmark_utils datasets solvers objective.py analysis_plots
+        ruff check benchmark_utils datasets solvers objective.py analysis_plots
 
     - name: Test with benchopt
       run: |
