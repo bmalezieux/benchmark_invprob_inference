@@ -1,69 +1,165 @@
+"""Reconstruction objective for inverse problems benchmarking.
+
+This objective evaluates reconstruction quality using PSNR and SSIM metrics,
+and optionally saves comparison figures for visual inspection.
+"""
+
+import torch
 from benchopt import BaseObjective
+from deepinv.loss.metric import PSNR
 
-import numpy as np
-from benchmark_utils import value_ols, gradient_ols
+from benchmark_utils import save_comparison_figure
 
 
-# The benchmark objective must be named `Objective` and
-# inherit from `BaseObjective` for `benchopt` to work properly.
 class Objective(BaseObjective):
+    """Reconstruction objective for inverse problems.
 
-    # Name to select the objective in the CLI and to display the results.
-    name = "Ordinary Least Squares"
+    Evaluates reconstruction quality using PSNR and SSIM metrics.
+    Optionally saves comparison figures for visual inspection.
+    """
 
-    # URL of the main repo for this benchmark.
-    url = "https://github.com/bmalezieux/benchmark_invprob_inference"
+    name = "reconstruction_objective"
 
-    # List of packages needed to run the benchmark.
-    # They are installed with conda; to use pip, use 'pip:packagename'. To
-    # install from a specific conda channel, use 'channelname:packagename'.
-    # Packages that are not necessary to the whole benchmark but only to some
-    # solvers or datasets should be declared in Dataset or Solver (see
-    # simulated.py and python-gd.py).
-    # Example syntax: requirements = ['numpy', 'pip::jax', 'pytorch::pytorch']
-    requirements = ["numpy"]
+    # The three methods below define the links between the Dataset,
+    # the Objective and the Solver.
+    def set_data(
+        self,
+        ground_truth,
+        measurement,
+        physics,
+        min_pixel=0.0,
+        max_pixel=1.0,
+        ground_truth_shape=None,
+        num_operators=None,
+    ):
+        """Set the data from a Dataset to compute the objective.
 
-    # Minimal version of benchopt required to run this benchmark.
-    # Bump it up if the benchmark depends on a new feature of benchopt.
-    min_benchopt_version = "1.7"
-
-    def set_data(self, X, y):
-        # The keyword arguments of this function are the keys of the dictionary
-        # returned by `Dataset.get_data`. This defines the benchmark's
-        # API to pass data. This is customizable for each benchmark.
-        self.X, self.y = X, y
-
-    def evaluate_result(self, beta):
-        # The keyword arguments of this function are the keys of the
-        # dictionary returned by `Solver.get_result`. This defines the
-        # benchmark's API to pass solvers' result. This is customizable for
-        # each benchmark.
-
-        # Here we can compute any metric to evaluate the quality of the
-        # solution. We compute the value of the objective function and the
-        # norm of the gradient.
-        grad = gradient_ols(self.X, self.y, beta)
-        value = value_ols(self.X, self.y, beta)
-
-        # This method can return many metrics in a dictionary. One of these
-        # metrics needs to be `value` for convergence detection purposes.
-        return dict(
-            value=value,
-            grad_norm=np.linalg.vector_norm(grad),
+        Parameters
+        ----------
+        ground_truth : torch.Tensor
+            Ground truth image.
+        measurement : torch.Tensor or TensorList
+            Noisy measurements.
+        physics : Physics
+            Forward operator.
+        min_pixel : float, optional
+            Minimum pixel value for metrics. Default: 0.0.
+        max_pixel : float, optional
+            Maximum pixel value for metrics. Default: 1.0.
+        ground_truth_shape : tuple, optional
+            Shape of ground truth tensor.
+        num_operators : int, optional
+            Number of operators in stacked physics.
+        """
+        self.ground_truth = ground_truth
+        self.measurement = measurement
+        self.physics = physics
+        self.ground_truth_shape = (
+            ground_truth_shape if ground_truth_shape is not None else ground_truth.shape
         )
-
-    def get_one_result(self):
-        # Return one solution. The return value should be an object compatible
-        # with `self.evaluate_result`. This is mainly for testing purposes.
-        return dict(beta=np.zeros(self.X.shape[1]))
+        self.num_operators = num_operators if num_operators is not None else 1
+        self.psnr_metric = PSNR(max_pixel=max_pixel)
+        # self.ssim_metric = SSIM(max_pixel=max_pixel)
+        self.min_pixel = min_pixel
+        self.max_pixel = max_pixel
+        self.evaluation_count = 0
 
     def get_objective(self):
-        # Define the information to pass to each solver to run the benchmark.
-        # The output of this function are the keyword arguments
-        # for `Solver.set_objective`. This defines the
-        # benchmark's API for passing the objective to the solver.
-        # It is customizable for each benchmark.
+        """Returns a dict passed to Solver.set_objective method.
+
+        Returns
+        -------
+        dict
+            Dictionary with measurement, physics, and metadata.
+        """
         return dict(
-            X=self.X,
-            y=self.y,
+            measurement=self.measurement,
+            physics=self.physics,
+            ground_truth_shape=self.ground_truth_shape,
+            num_operators=self.num_operators,
+            min_pixel=self.min_pixel,
+            max_pixel=self.max_pixel,
+        )
+
+    def evaluate_result(self, reconstruction, name, **kwargs):
+        """Compute the objective value(s) given the output of a solver.
+
+        Parameters
+        ----------
+        reconstruction : torch.Tensor
+            Reconstructed image from solver.
+        name : str
+            Name identifier for the solver/configuration.
+        **kwargs : dict
+            Optional GPU and step metrics including:
+            - gpu_memory_allocated_mb, gpu_memory_reserved_mb,
+              gpu_memory_max_allocated_mb, gpu_available_memory_mb
+            - gradient_time_sec, gradient_memory_allocated_mb,
+              gradient_memory_reserved_mb, gradient_memory_delta_mb,
+              gradient_memory_peak_mb
+            - denoise_time_sec, denoise_memory_allocated_mb,
+              denoise_memory_reserved_mb, denoise_memory_delta_mb,
+              denoise_memory_peak_mb
+
+        Returns
+        -------
+        dict
+            Dictionary with 'value' (negative PSNR for minimization),
+            'psnr', and optional GPU/step metrics.
+        """
+        with torch.no_grad():
+            # Ensure reconstruction is on the same device as ground truth
+            reconstruction = reconstruction.to(self.ground_truth.device)
+
+            psnr_tensor = self.psnr_metric(reconstruction, self.ground_truth)
+            # ssim_tensor = self.ssim_metric(reconstruction, self.ground_truth)
+
+            # Handle batch case - take mean across batch dimension
+            psnr = (
+                psnr_tensor.mean().item()
+                if psnr_tensor.numel() > 1
+                else psnr_tensor.item()
+            )
+            # ssim = (
+            #     ssim_tensor.mean().item()
+            #     if ssim_tensor.numel() > 1
+            #     else ssim_tensor.item()
+            # )
+
+            # Save comparison figure
+            output_dir = "evaluation_output/" + name.replace("/", "_").replace("..", "")
+            self.evaluation_count += 1
+            save_comparison_figure(
+                self.ground_truth,
+                reconstruction,
+                # metrics={'psnr': psnr, 'ssim': ssim},
+                metrics={"psnr": psnr},
+                output_dir=output_dir,
+                filename=f"eval_{self.evaluation_count:04d}.png",
+                evaluation_count=self.evaluation_count,
+            )
+
+        # Return value (primary metric for stopping criterion) and additional metrics
+        result = dict(value=-psnr, psnr=psnr)
+
+        # Add all non-None metrics from kwargs to result
+        for key, value in kwargs.items():
+            if value is not None:
+                result[key] = value
+
+        return result
+
+    def get_one_result(self):
+        """Return one solution for which the objective can be evaluated.
+
+        This function is mostly used for testing and debugging purposes.
+
+        Returns
+        -------
+        dict
+            Dictionary with a noisy version of ground truth.
+        """
+        return dict(
+            reconstruction=self.ground_truth + self.ground_truth.std(),
+            name="test_result",
         )
