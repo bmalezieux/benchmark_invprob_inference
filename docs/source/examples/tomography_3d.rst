@@ -21,6 +21,7 @@ The dataset consists of X-ray Computed Tomography (CT) data of a walnut, using *
    :align: center
    :width: 100%
 
+**Left**: Axial slice (horizontal view from above) **Right**: Coronal slice (vertical view from front).
 
 
 Configuration: Experiment Setup
@@ -56,7 +57,7 @@ All runs use 2 GPUs but vary the batch size used during the distributed denoisin
 
 **Why vary batch size?**
 
-Processing more patches at once (higher batch size) usually improves computational speed but increases peak memory usage. If the batch size is too high, the process will crash with an Out-Of-Memory (OOM) error. 
+Processing more patches at once can sometimes speed up computation, but it also increases memory usage, and a batch that’s too large may cause an Out-Of-Memory (OOM) error.
 
 Dataset Parameters
 ~~~~~~~~~~~~~~~~~~~
@@ -70,8 +71,9 @@ Dataset Parameters
          geometry_type: conebeam
          use_dataset_sinogram: true
 
-- ``num_projections: 50``: We use a subset of projections to speed up the benchmark.
-- ``geometry_type: conebeam``: Defines the physics model used for the forward operator.
+- ``num_operators: 2``: Number of tomography operators (angle splits).
+- ``num_projections: 50``: Number of projection angles to use.
+- ``geometry_type: conebeam``: Projection geometry for ASTRA.
 
 Solver 
 ~~~~~~
@@ -90,7 +92,7 @@ Interpreting Results
 
 **Benchmark Results**
 
-Below is an interactive dashboard showing the trade-offs:
+Below is an interactive dashboard comparing the configurations:
 
 .. raw:: html
 
@@ -101,16 +103,11 @@ Interpretation
 
 **Batch Size vs. Memory**
 
-The results illustrate the direct correlation between ``max_batch_size`` and peak GPU memory allocation: larger batch sizes require more memory. When GPU resources are limited, smaller batch sizes are necessary to avoid out-of-memory errors.
+Peak GPU memory grows with ``max_batch_size``, so smaller batches are needed when memory is limited to prevent OOM errors.
 
 **Batch Size vs. Time**
-
  
-It is often assumed that increasing batch size reduces total denoising time by better utilizing the GPU’s parallel processing capabilities. However, this assumption does not always hold and depends on factors such as the denoiser model, image size, and chosen batch size. Further discussion of this effect is provided on the :doc:`takeaways page <../takeaways/denoiser_scaling>`.
+Larger batch sizes are usually thought to speed up denoising by making better use of GPU parallelism, but that doesn’t always happen. The effect depends on the denoiser model, image size, and chosen batch size. For more details, see the :doc:`takeaways page <../takeaways/gpu_memory_time_analysis>`.
 
 
-**Key Insights**
-
-1. **3D Requires Distribution**: For 3D volumes, distributed computing is often a necessity, not just an optimization, due to memory constraints.
-2. **Tuning Matters**: Parameters like ``patch_size`` and ``max_batch_size`` are critical for balancing memory usage and speed.
 

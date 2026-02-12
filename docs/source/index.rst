@@ -23,7 +23,7 @@ The benchmark includes three imaging scenarios:
 
 - **Tomography (2D/3D):** Computed tomography reconstruction from multiple projection operators
 - **High-Resolution Color Images:** Image restoration from multiple anisotropic Gaussian blur operators
-- **Radio Interferometry:** Radio astronomy imaging from interferometric measurements
+
 
 These datasets are multi-operator problems: from a single ground truth, we observe different measurements (e.g., tomography uses different projection angles; natural images use different blur kernels). The goal is to recover the original image from these measurements. 
 The benchmark focuses on large scale images or volumes, of order of magnitude from 1 to 100 million pixels/voxels.

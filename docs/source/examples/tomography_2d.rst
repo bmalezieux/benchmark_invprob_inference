@@ -97,12 +97,12 @@ Dataset Parameters
    dataset:
      - tomography_2d:
          img_size: 2048
-         num_operators: 1
+         num_operators: 8
          num_angles: 100
          noise_level: 0.01
 
 - ``img_size: 2048``: A high resolution for standard testing.
-- ``num_operators: 1``: Number of tomography operators (angle splits).
+- ``num_operators: 8``: Number of tomography operators (angle splits).
 - ``num_angles: 100``: Total number of projection angles.
 - ``noise_level: 0.01``: Additive Gaussian noise level.
 
@@ -125,8 +125,6 @@ We use a Plug-and-Play (PnP) solver with a DRUNet denoiser:
 
 - ``denoiser_sigma``: Noise level hint passed to the denoiser. Helps the denoiser adapt to the noise level.
 
-- ``step_size``: Gradient descent step size. Controls convergence speed and stability.
-
 - ``init_method``: How to initialize the reconstruction. 
 
 Interpreting Results
@@ -142,17 +140,12 @@ Below is an interactive dashboard comparing the configurations:
 
 Interpretation
 ~~~~~~~~~~~~~~
-**PSNR vs. Iteration Count & PSNR vs. Computation Time**
+**PSNR vs. Iteration & PSNR vs. Computation Time**
 
-All configurations converge to similar final PSNR values, confirming that distributed processing preserves reconstruction quality. Multi-GPU configurations reach the target PSNR significantly faster than the single-GPU baseline, demonstrating computational efficiency gains.
+All setups reach about the same final PSNR, so using multiple GPUs does not reduce reconstruction quality. The multi-GPU runs reach the target PSNR much faster than the single-GPU baseline, which shows the speedup clearly.
+
 
 **Time Breakdown: Gradient and Denoiser**
 
-The stacked bar chart illustrates the computational time spent on gradient computation and denoiser execution for each configuration. The denoiser clearly dominates the overall runtime, making it the most computationally intensive component. Increasing the number of GPUs substantially reduces denoiser execution time, while gradient computation time remains largely unchanged. This demonstrates the effectiveness of distributing the denoiser across multiple GPUs to alleviate the primary performance bottleneck. In contrast, because gradient computation is relatively inexpensive, communication overhead in the distributed setting slightly increases total runtime compared to the single-GPU case.
+The denoiser dominates runtime and is the main bottleneck. Adding more GPUs reduces denoiser time, but gradient time slightly increases since the gradient step is cheap, and communication between GPUs often takes longer than the computation itself.
 
-
-**Key Insights**
-
-1. **Consistency**: All configurations achieve similar final PSNR, confirming that distributed processing preserves reconstruction quality.
-2. **Efficiency**: Multi-GPU configurations reach the target PSNR faster (lower time-to-convergence).
-3. **Bottleneck**: The denoiser is the primary bottleneck in this problem and benefits significantly from distribution across multiple GPUs.

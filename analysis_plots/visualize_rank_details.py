@@ -564,13 +564,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "output_dir",
         nargs="?",
-        default="outputs/tomography_3d",
+        default="outputs/highres_color_image",
         help="Path to the output directory containing CSV files",
     )
     parser.add_argument(
         "results_dir",
         nargs="?",
-        default="results_images",
+        default="docs/source/_static/images/",
         help="Directory to save visualization images",
     )
 

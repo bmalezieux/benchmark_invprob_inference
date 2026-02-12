@@ -53,7 +53,7 @@ See :doc:`config_guide` for details on customizing configurations.
 **What happens during execution:**
 
 1. **Configuration parsing** — BenchOpt reads both configs and generates a grid of experiments
-2. **Job submission** — Each job executes one complete reconstruction pipeline: a solver (PnP or unrolling) running on a specific dataset and parameter combination
+2. **Job submission** — Each job executes one complete reconstruction pipeline: a solver (PnP) running on a specific dataset and parameter combination
 3. **Parallel execution** — Each job can run in parallel on multiple GPUs if specified in the SLURM config
 4. **Results collection** — Convergence curves (PSNR), runtime, and memory usage are saved for each job
 

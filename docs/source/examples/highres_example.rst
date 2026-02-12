@@ -28,7 +28,7 @@ Configuration: Experiment Setup
 
 **Benchmark Purpose**
 
-This is a toy example designed to test **distributed computing efficiency** on large-scale inverse problems. The high-resolution image (2048×2048) combined with forward operators (8 blurs) and a pretrained prior (DRUNet) creates computational demands that benefit from distributed processing across multiple GPUs. 
+This is a **toy example** designed to test **distributed computing efficiency** on large-scale inverse problems. The high-resolution image (2048×1366) combined with forward operators (8 blurs) and a pretrained prior (DRUNet) creates computational demands that benefit from distributed processing across multiple GPUs. 
 
 We use the configuration file ``configs/highres_imaging.yml`` to set up the experiment. The configuration specifies:
 
@@ -154,23 +154,14 @@ Below is an interactive dashboard comparing the three configurations:
 Interpretation
 ~~~~~~~~~~~~~~
 
-**PSNR vs. Iteration Count & PSNR vs. Computation Time**
+**PSNR vs. Iteration & PSNR vs. Computation Time**
 
-All configurations converge to similar final PSNR values, confirming that distributed processing preserves reconstruction quality. Multi-GPU configurations reach the target PSNR significantly faster than the single-GPU baseline, demonstrating computational efficiency gains.
+All setups reach about the same final PSNR, so using multiple GPUs does not reduce reconstruction quality. The multi-GPU runs reach the target PSNR much faster than the single-GPU baseline, which shows the speedup clearly.
 
 **Time Breakdown: Gradient and Denoiser**
 
-The stacked bar chart illustrates the computational time spent on gradient computation and denoiser execution for each configuration. The denoiser clearly dominates the overall runtime, making it the most computationally intensive component. Increasing the number of GPUs substantially reduces denoiser execution time, while gradient computation time remains largely unchanged. This demonstrates the effectiveness of distributing the denoiser across multiple GPUs to alleviate the primary performance bottleneck. In contrast, because gradient computation is relatively inexpensive, communication overhead in the distributed setting slightly increases total runtime compared to the single-GPU case.
+The denoiser dominates runtime and is the main bottleneck. Adding more GPUs reduces denoiser time, but gradient time stays almost the same since the gradient step is cheap, and communication between GPUs often takes longer than the computation itself.
 
 **GPU Memory Usage: Gradient and Denoiser**
 
-This figure presents GPU memory consumption during gradient computation and denoiser execution. Tracking peak allocated memory is essential for preventing out-of-memory (OOM) errors. For multi-GPU configurations, the reported values correspond to rank 0 (the main process), which is representative of the other ranks.
-
-An interesting behavior is observed in which the 2-GPU configuration exhibits higher denoiser memory usage (4.3 GB) than the single-GPU setup (1.6 GB). This behavior can arise because, for certain denoiser models, peak memory allocation is highly sensitive to image dimensions, even when the effective input size changes only slightly. Further discussion of this effect is provided on the :doc:`takeaways page <../takeaways/denoiser_scaling>`.
-
-**Key Insights**
-
-1. **Consistency**: All configurations achieve similar final PSNR, confirming that distributed processing preserves reconstruction quality.
-2. **Efficiency**: Multi-GPU configurations reach the target PSNR faster (lower time-to-convergence).
-3. **Bottleneck**: The denoiser is the primary bottleneck in this problem and benefits significantly from distribution across multiple GPUs.
-
+For multi-GPU configurations, the max memory shown corresponds to rank 0 (the main process), which is similar to other ranks. Interestingly, the 2-GPU setup uses more denoiser memory (4.3 GB) than a single GPU (1.6 GB), because peak memory for some denoisers is highly sensitive to image dimensions, even with small changes in input size. See the :doc:`takeaways page <../takeaways/gpu_memory_time_analysis>` for more details.

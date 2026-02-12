@@ -23,7 +23,7 @@ File                       Purpose
 Parallel Configuration (SLURM)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ``--parallel-config`` file (e.g., `configs/config_parallel.yml <../../.../../configs/config_parallel.yml>`_) defines cluster-level settings. Here is an example for a SLURM cluster (Jean-Zay):
+The ``--parallel-config`` file (e.g., `configs/config_parallel.yml <../../../../configs/config_parallel.yml>`_) defines cluster-level settings. Here is an example for a SLURM cluster (Jean-Zay):
 
 .. code-block:: yaml
 
@@ -87,6 +87,7 @@ This section defines GPU configurations and parallelization strategies. Each row
    slurm_gres, slurm_ntasks_per_node, slurm_nodes, distribute_physics, distribute_denoiser, patch_size, overlap, max_batch_size: [
      ["gpu:1", 1, 1, false, false, 0,   0,  0],
      ["gpu:2", 2, 1, true,  true,  448, 32, 0],
+     ["gpu:4", 4, 1, true,  true,  448, 32, 0],
    ]
 
 **Key fields:**
@@ -139,7 +140,7 @@ To create your own experiment:
 
    .. code-block:: bash
 
-      python -m benchopt run . \
+      benchopt run . \
           --parallel-config ./configs/config_parallel.yml \
           --config ./configs/my_experiment.yml
 
