@@ -128,8 +128,9 @@ class Dataset(BaseDataset):
                      # If we resize here, we must use resized image for hash.
                 ms_cache_dir,
                 pixel_size_arcsec=pixel_size_arcsec,
-                freq_hz=1e9,
-                obs_duration=600
+                start_frequency_hz=100e6,
+                number_of_time_steps=512,
+                integral_time=7.997
             )
 
             if not ms_path.exists():
@@ -141,7 +142,7 @@ class Dataset(BaseDataset):
             # Create Physics Operator
             imager_config = DirtyImagerConfig(
                 imaging_npixel=self.image_size,
-                imaging_cellsize=np.deg2rad(pixel_size_arcsec / 3600.0),
+                imaging_cellsize=np.deg2rad(pixel_size_arcsec / 3600.0), # get_cellsize()
                 combine_across_frequencies=False
             )
             

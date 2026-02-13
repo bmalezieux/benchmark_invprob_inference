@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from benchmark_utils.karabo_utils import generate_meerkat_visibilities
 from benchmark_utils.radio_utils import load_and_resize_image
 
-def generate_data_for_size(image_size, data_path, use_gpus=False):
+def generate_data_for_size(image_size, data_path, use_gpus=False, number_of_time_steps=None, start_frequency_hz=None, end_frequency_hz=None, number_of_channels=None):
     """Generate data for a specific image size."""
     
     # Cache directory
@@ -39,17 +39,18 @@ def generate_data_for_size(image_size, data_path, use_gpus=False):
     
     # Simulation parameters (fixed)
     pixel_size_arcsec = 1.0
-    freq_hz = 1e9
-    obs_duration = 600
 
     # Generate visibilities
     vis_path = generate_meerkat_visibilities(
+        fits_file,
         resized_img,
         ms_cache_dir,
         pixel_size_arcsec=pixel_size_arcsec,
-        freq_hz=freq_hz,
-        obs_duration=obs_duration,
-        use_gpus=use_gpus
+        use_gpus=use_gpus,
+        number_of_time_steps=number_of_time_steps,
+        start_frequency_hz=start_frequency_hz,
+        end_frequency_hz=end_frequency_hz,
+        number_of_channels=number_of_channels
     )
     
     # Cache the ground truth image
@@ -59,9 +60,9 @@ def generate_data_for_size(image_size, data_path, use_gpus=False):
 
     print(f"Visibilities ready for size {image_size}: {vis_path}")
 
-def main_generation_loop(image_sizes, data_path, use_gpus):
+def main_generation_loop(image_sizes, data_path, use_gpus, number_of_time_steps, start_frequency_hz, end_frequency_hz, number_of_channels):
     for size in image_sizes:
-        generate_data_for_size(size, data_path, use_gpus=use_gpus)
+        generate_data_for_size(size, data_path, use_gpus=use_gpus, number_of_time_steps=number_of_time_steps, start_frequency_hz=start_frequency_hz, end_frequency_hz=end_frequency_hz, number_of_channels=number_of_channels)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -70,6 +71,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_gpus", action="store_true", help="Whether to use GPUs for simulation."
     )
+    parser.add_argument("--number_of_time_steps", type=int, default=256)
+    parser.add_argument("--start_frequency_hz", type=float, default=100e6)
+    parser.add_argument("--end_frequency_hz", type=float, default=120e6)
+    parser.add_argument("--number_of_channels", type=int, default=12)
     args = parser.parse_args()
     
     # Check if GPU is available 
@@ -78,4 +83,6 @@ if __name__ == "__main__":
     use_gpus = args.use_gpus
     print(f"Running generation with use_gpus={use_gpus}")
 
-    main_generation_loop(args.image_size, args.data_path, use_gpus)
+    main_generation_loop(args.image_size, args.data_path, use_gpus,
+         args.number_of_time_steps, args.start_frequency_hz, args.end_frequency_hz,
+         args.number_of_channels)

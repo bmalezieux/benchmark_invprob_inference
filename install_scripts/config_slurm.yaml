@@ -2,6 +2,10 @@ job:
   image_size: [256]
   data_path: "./data/radio_interferometry"
   use_gpus: true
+  number_of_time_steps: 512
+  start_frequency_hz: 100e6
+  end_frequency_hz: 120e6
+  number_of_channels: 12
 
 singularity:
   image_path: "karabo.sif"  # Relative to project root
@@ -12,6 +16,7 @@ singularity:
 slurm:
   folder: "debug_output/slurm_logs"
   job_name: "karabo_simulator"
+  account: "hfk@v100"
   nodes: 1
   ntasks_per_node: 1
   cpus_per_task: 40

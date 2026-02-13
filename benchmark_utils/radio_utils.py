@@ -37,8 +37,8 @@ def get_meerkat_visibilities_path(
     image: np.ndarray,
     cache_dir: Path,
     pixel_size_arcsec: float,
-    freq_hz: float = 1e9,
-    obs_duration: float = 600, # 10 min
+    start_frequency_hz: float = 1e9,
+    number_of_time_steps: int = 256,
     integral_time: float = 10, # 10 sec integration
 ):
     """
@@ -47,8 +47,8 @@ def get_meerkat_visibilities_path(
     # Create a unique hash for the simulation parameters
     params = {
         'pixel_size_arcsec': pixel_size_arcsec,
-        'freq_hz': freq_hz,
-        'obs_duration': obs_duration,
+        'start_frequency_hz': start_frequency_hz,
+        'number_of_time_steps': number_of_time_steps,
         'integral_time': integral_time
     }
     params_str = str(sorted(params.items()))
