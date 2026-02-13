@@ -3,29 +3,34 @@
 This dataset uses a real color image from the CBSD dataset and applies
 multiple anisotropic Gaussian blur operators with equiangular orientations.
 """
+
 import os
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
-
+from benchopt import BaseDataset, config
+from deepinv.distributed import DistributedContext
 from deepinv.physics import GaussianNoise, stack
 from deepinv.physics.blur import Blur, gaussian_blur
-from deepinv.distributed import DistributedContext
 
-from benchopt import BaseDataset
-from benchopt import config
 from benchmark_utils import load_cached_example, save_measurements_figure
 
 
 class Dataset(BaseDataset):
     # Name of the Dataset, used to select it in the CLI
-    name = 'highres_color_image'
+    name = "highres_color_image"
+    requirements = [
+        "torch",
+        "numpy",
+        "pip::git+https://github.com/deepinv/deepinv.git@main",
+    ]
 
     parameters = {
-        'image_size': [512, 1024, 2048],
-        'num_operators': [1, 8, 16],
-        'noise_level': [0.01, 0.1],
-        'seed': [42],
+        "image_size": [512, 1024, 2048],
+        "num_operators": [1, 8, 16],
+        "noise_level": [0.01, 0.1],
+        "seed": [42],
     }
 
     def __init__(self, image_size=512, num_operators=1, noise_level=0.01, seed=42):
@@ -46,10 +51,15 @@ class Dataset(BaseDataset):
             # Try to initialize
             try:
                 import submitit
-                submitit.helpers.TorchDistributedEnvironment().export(set_cuda_visible_devices=False)
+
+                submitit.helpers.TorchDistributedEnvironment().export(
+                    set_cuda_visible_devices=False
+                )
                 print("Initialized distributed environment via submitit in dataset")
             except ImportError:
-                print("submitit not installed, dataset will run in non-distributed mode")
+                print(
+                    "submitit not installed, dataset will run in non-distributed mode"
+                )
             except RuntimeError as e:
                 # This could be SLURM not available or other runtime issues
                 error_msg = str(e).lower()
@@ -58,7 +68,9 @@ class Dataset(BaseDataset):
                 else:
                     print(f"RuntimeError initializing submitit in dataset: {e}")
         else:
-            print(f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}")
+            print(
+                f"Distributed environment already initialized in dataset: RANK={os.environ.get('RANK')}, WORLD_SIZE={os.environ.get('WORLD_SIZE')}"
+            )
 
         # Use cleanup=False to keep process group alive for solver
         # Solver will handle cleanup when it's done
@@ -72,26 +84,20 @@ class Dataset(BaseDataset):
 
             # Load example image in original size
             img = load_cached_example(
-                "CBSD_0010.png",
-                cache_dir=data_path, 
-                grayscale=False, 
-                device=device
+                "CBSD_0010.png", cache_dir=data_path, grayscale=False, device=device
             )
 
             # Resize image so that max dimension equals self.image_size
             _, _, h, w = img.shape
             max_dim = max(h, w)
-            
+
             if max_dim != self.image_size:
                 scale_factor = self.image_size / max_dim
                 new_h = int(h * scale_factor)
                 new_w = int(w * scale_factor)
-                
+
                 ground_truth = F.interpolate(
-                    img, 
-                    size=(new_h, new_w), 
-                    mode='bicubic', 
-                    align_corners=False
+                    img, size=(new_h, new_w), mode="bicubic", align_corners=False
                 )
                 print(f"Resized image from ({h}, {w}) to ({new_h}, {new_w})")
             else:
@@ -104,7 +110,7 @@ class Dataset(BaseDataset):
             # Set sigma values based on a fixed blur strength in normalized coordinates
             sigma_x = self.image_size * 0.01  # 1% of image size
             sigma_y = self.image_size * 0.005  # 0.5% of image size (anisotropic)
-            
+
             # Calculate equiangular directions based on num_operators
             # Angles are evenly distributed over 180 degrees (since blur is symmetric)
             angles = np.linspace(0, 180, self.num_operators)
@@ -112,14 +118,12 @@ class Dataset(BaseDataset):
             for i in range(self.num_operators):
                 # Calculate angle for this operator (equiangular spacing)
                 angle = angles[i]
-                
+
                 # Create anisotropic blur kernel with specific angle
                 kernel = gaussian_blur(
-                    sigma=(sigma_x, sigma_y), 
-                    angle=angle, 
-                    device=str(device)
+                    sigma=(sigma_x, sigma_y), angle=angle, device=str(device)
                 )
-                
+
                 # Create blur operator with circular padding
                 blur_op = Blur(filter=kernel, padding="circular", device=str(device))
 
@@ -141,7 +145,11 @@ class Dataset(BaseDataset):
 
             if ctx.rank == 0:
                 # Save debug visualization
-                save_measurements_figure(ground_truth, measurement, filename="highres_color_image_measurements.png")
+                save_measurements_figure(
+                    ground_truth,
+                    measurement,
+                    filename="highres_color_image_measurements.png",
+                )
 
         return dict(
             ground_truth=ground_truth,

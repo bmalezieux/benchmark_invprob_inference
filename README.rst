@@ -1,27 +1,38 @@
 Benchmarking inference for large scale inverse problems 
-=====================
+=====================================================
 |Build Status| |Python 3.10+|
 
-Benchopt is a package to simplify and make more transparent and
-reproducible comparisons of optimization methods.
 This benchmark is dedicated to solvers of inverse problems in large scale settings.
+
+The benchmark compares the performance of different reconstruction algorithms (solvers) on various inverse problems (datasets) such as tomography, deblurring, etc.
+It uses standard metrics like PSNR to evaluate the reconstruction quality.
 
 Install
 --------
 
-This benchmark can be run using the following commands:
+This benchmark requires to be installed using the following commands:
 
 .. code-block::
 
    $ pip install -U benchopt
    $ git clone https://github.com/bmalezieux/benchmark_invprob_inference
-   $ benchopt run benchmark_invprob_inference
+   $ cd benchmark_invprob_inference
+   $ pip install -e .
 
-Apart from the problem, options can be passed to ``benchopt run``, to restrict the benchmarks to some solvers or datasets, e.g.:
+Run the benchmark
+-----------------
+
+To run the benchmark, use the ``benchopt run`` command from the root of the repository:
 
 .. code-block::
 
-	$ benchopt run benchmark_invprob_inference -s solver1 -d dataset2 --max-runs 10 --n-repetitions 10
+   $ benchopt run .
+
+You can also specify which solvers and datasets to run:
+
+.. code-block::
+
+   $ benchopt run . -s solver1 -d dataset2 --max-runs 10 --n-repetitions 10
 
 
 Use ``benchopt run -h`` for more details about these options, or visit https://benchopt.github.io/api.html.
