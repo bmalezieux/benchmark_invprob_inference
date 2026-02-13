@@ -34,7 +34,7 @@ Why does this matter? Deep neural networks often rely on operations (like downsa
 **Explanation**
 
 1.  **cuDNN Heuristics**: NVIDIA's cuDNN library runs internal benchmarks to select the fastest convolution algorithm for a specific input shape. Irregular shapes can lead to algorithms that are less memory-intensive,causing noticeable drops in memory usage.
-2.  **Architecture Depth**: Deep architectures like DRUNet use skip connections that store intermediate activations, making memory spikes more pronounced.
+2.  **Architecture Depth**: Deep architectures like DRUNet use residual and skip connections that store intermediate activations, this can lead to unexpected changes in memory usage.
 
 Returning to the :doc:`high-resolution color image example <../examples/highres_example>`, the image size is 2048×1366 (3:2 aspect ratio), which is not divisible by 8. This likely explains the difference in memory usage observed in the multi-GPU setup compared to a single GPU.
 

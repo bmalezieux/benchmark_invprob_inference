@@ -153,7 +153,7 @@ def plot_generic(scaling_dict, output_path, title, y_label, metric_cfg, y_range=
     if all_ngpus:
         if "efficiency" in y_label.lower():
             ideal = [100] * len(all_ngpus)
-            name = "Ideal Efficiency (100%)"
+            name = "Ideal Efficiency"
         else:
             baseline = min(all_ngpus)
             ideal = [n/baseline for n in all_ngpus]
@@ -169,7 +169,7 @@ def plot_generic(scaling_dict, output_path, title, y_label, metric_cfg, y_range=
         xaxis=dict(title="Number of GPUs", tickmode="array", tickvals=all_ngpus, tickfont=dict(size=14)),
         yaxis=dict(title=y_label, range=y_range, tickfont=dict(size=14)),
         template="plotly_white", margin=dict(l=50, r=20, t=60, b=50),
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        legend=dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5),
         hovermode="x unified"
     )
     
@@ -177,11 +177,13 @@ def plot_generic(scaling_dict, output_path, title, y_label, metric_cfg, y_range=
     print(f"Saved: {output_path}")
 
 def create_dashboard(results_path, result_name, plots):
-    charts_html = "".join([
-        f'<div class="chart-container"><iframe src="{p}" title="{p}"></iframe></div>' 
-        for p in plots
-    ])
-    
+    charts_html = "".join(
+        [
+            f'<div class="chart-container"><iframe src="{p}" title="{p}"></iframe></div>'
+            for p in plots
+        ]
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -190,9 +192,9 @@ def create_dashboard(results_path, result_name, plots):
     <style>
         body {{ font-family: sans-serif; margin: 0; padding: 20px; background: #f8f9fa; }}
         .header {{ text-align: center; margin-bottom: 30px; }}
-        .dashboard-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
-        .chart-container {{ position: relative; padding-bottom: 70%; background: white; border: 1px solid #ddd; }}
-        iframe {{ position: absolute; width: 100%; height: 100%; border: none; }}
+        .dashboard-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0; }}
+        .chart-container {{ position: relative; padding-bottom: 70%; background: white; border: 0; }}
+        iframe {{ position: absolute; width: 100%; height: 100%; border: none; display: block; }}
     </style>
 </head>
 <body>
