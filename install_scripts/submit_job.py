@@ -53,9 +53,20 @@ def run_simulation(config):
     working_dir = config['singularity'].get('working_dir', '/workspace')
     mount_point = config['singularity'].get('mount_point', '/workspace')
     
+    # Create cache dirs in project root (which is mounted)
+    cache_dir = project_root / "debug_output" / "cache"
+    mpl_dir = project_root / "debug_output" / "mpl_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    mpl_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Path inside container
+    container_cache = f"{mount_point}/debug_output/cache"
+    container_mpl = f"{mount_point}/debug_output/mpl_cache"
+
     cmd = [
         "singularity", "exec", "--nv",
         "-B", f"{project_root}:{mount_point}",
+        "--env", f"XDG_CACHE_HOME={container_cache},MPLCONFIGDIR={container_mpl}",
         "--pwd", working_dir,
         str(final_image_path),
         "python", "benchmark_utils/generate_radio_data.py",
@@ -114,9 +125,12 @@ def main():
         
         kwargs = {}
         # Map Slurm parameters
-        for k in ['job_name', 'time', 'gres', 'cpus_per_task', 'hint', 'ntasks_per_node', 'mem', 'partition', 'account']:
+        for k in ['job_name', 'time', 'gres', 'cpus_per_task', 'ntasks_per_node', 'mem', 'partition', 'account']:
             if k in slurm_conf:
                 kwargs[f"slurm_{k}"] = slurm_conf[k]
+
+        if 'hint' in slurm_conf:
+            kwargs['slurm_additional_parameters'] = {'hint': slurm_conf['hint']}
         
         # Setup (modules etc)
         if "setup" in slurm_conf:

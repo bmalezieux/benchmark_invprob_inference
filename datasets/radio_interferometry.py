@@ -29,9 +29,13 @@ class Dataset(BaseDataset):
     @classmethod
     def is_installed(cls, env_name=None, quiet=True, **kwargs):
         # 1. Check if module can be imported (dependencies present)
-        try:
+        try: 
+            import astropy
+            import casacore
             import deepinv
+            import torchkbnufft
             from deepinv.distributed import DistributedContext
+
         except ImportError:
             return False
         

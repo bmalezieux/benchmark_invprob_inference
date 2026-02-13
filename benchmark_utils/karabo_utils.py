@@ -11,6 +11,7 @@ from karabo.simulator_backend import SimulatorBackend
 
 from benchmark_utils.radio_utils import get_meerkat_visibilities_path
 
+
 def image_to_skymodel(image, ra_center, dec_center, pixel_size_deg):
     """
     Convert an image numpy array to a Karabo SkyModel.

@@ -9,6 +9,9 @@ dependencies = [
     "deepinv @ git+https://github.com/deepinv/deepinv.git@main",
     "numpy>=2.2.0",
     "torch>=2.7.0",
+    "python-casacore>=3.7.0",
+    "astropy>=7.2.0",
+    "torchkbnufft>=1.5.0",
 ]
 
 [dependency-groups]

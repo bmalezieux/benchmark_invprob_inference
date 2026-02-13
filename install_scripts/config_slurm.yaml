@@ -16,9 +16,10 @@ slurm:
   nodes: 1
   ntasks_per_node: 1
   cpus_per_gpu: 10
-  gres: "gpu:1"
+  gres: "gpu:4"
   time: "00:10:00"
   hint: "nomultithread"
+  account: # Set to your SLURM account, e.g., "xyz@v100"
   setup:
     - "module purge"
     - "module load singularity"
