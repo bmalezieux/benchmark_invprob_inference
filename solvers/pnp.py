@@ -35,7 +35,7 @@ def compute_step_size_from_operator(
         )
 
         # Compute Lipschitz constant
-        lipschitz_constant = operator.compute_norm(x_example,local_only=False)
+        lipschitz_constant = operator.compute_norm(x_example, local_only=False)
 
         return 1.0 / lipschitz_constant if lipschitz_constant > 0 else 1.0
 

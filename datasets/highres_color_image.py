@@ -125,7 +125,9 @@ class Dataset(BaseDataset):
                 )
 
                 # Create blur operator with circular padding
-                blur_op = Blur(filter=kernel, padding="circular", device=str(device),use_fft=True)
+                blur_op = Blur(
+                    filter=kernel, padding="circular", device=str(device), use_fft=True
+                )
 
                 # Set the noise model with reproducible random generator
                 rng = torch.Generator(device=device).manual_seed(self.seed + i)
