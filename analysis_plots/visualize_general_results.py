@@ -488,7 +488,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "results_dir",
         nargs="?",
-        default="results_images",
+        default="docs/source/_static/images/",
         help="Directory to save visualization images",
     )
 

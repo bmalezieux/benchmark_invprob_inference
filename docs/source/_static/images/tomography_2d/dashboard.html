@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Benchmark Results Dashboard - tomography_2d</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { 
+            width: 100%; 
+            height: 100%; 
+            margin: 0; 
+            padding: 0; 
+            overflow-x: hidden;
+        }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: white;
+        }
+        .container { 
+            width: 100%; 
+            min-height: 100%;
+            background: white;
+        }
+        .header { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            padding: 20px; 
+            text-align: center;
+        }
+        .header h1 { font-size: clamp(1.5em, 4vw, 2.5em); margin-bottom: 8px; font-weight: 700; }
+        .header p { font-size: clamp(0.9em, 2vw, 1.2em); opacity: 0.95; }
+        .timestamp { 
+            text-align: center; 
+            padding: 10px; 
+            background: #f8f9fa;
+            color: #6c757d; 
+            font-size: clamp(0.8em, 1.5vw, 0.9em);
+        }
+        .dashboard-grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 0;
+            width: 100%;
+        }
+        .chart-container { 
+            width: 100%; 
+            height: 0;
+            padding-bottom: 90%; /* Aspect ratio control */
+            position: relative;
+            background: white; 
+            border: 1px solid #e0e0e0;
+        }
+        iframe { 
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%; 
+            height: 100%; 
+            border: none; 
+            display: block; 
+        }
+        .footer { 
+            text-align: center; 
+            padding: 15px; 
+            background: #f8f9fa; 
+            color: #6c757d; 
+            font-size: clamp(0.8em, 1.5vw, 0.9em); 
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            .chart-container {
+                padding-bottom: 80%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Benchmark Results Dashboard</h1>
+            <p>Tomography 2D</p>
+        </div>
+        <div class="timestamp">Generated on February 11, 2026 at 13:43:02</div>
+        <div class="dashboard-grid">
+            <div class="chart-container"><iframe src="psnr_vs_time.html" title="PSNR vs Time"></iframe></div>
+            <div class="chart-container"><iframe src="psnr_vs_iteration.html" title="PSNR vs Iteration"></iframe></div>
+            <div class="chart-container"><iframe src="time_breakdown_stacked.html" title="Time Breakdown"></iframe></div>
+            <div class="chart-container"><iframe src="gpu_memory_gradient_denoiser.html" title="GPU Memory"></iframe></div>
+        </div>
+        <div class="footer">Benchmark Analysis Dashboard </div>
+    </div>
+</body>
+</html>

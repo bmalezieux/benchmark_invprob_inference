@@ -1,0 +1,13 @@
+/* Increase content width to 80% for all pages */
+.wy-nav-content {
+    max-width: 80% !important;
+}
+
+/* Ensure it applies to all content sections */
+.rst-content {
+    max-width: none !important;
+}
+
+.document {
+    max-width: none !important;
+}
