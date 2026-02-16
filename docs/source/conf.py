@@ -24,7 +24,10 @@ release = "0.1.0"
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-extensions = []
+extensions = [
+    # Registers Sphinx-Gallery directives used in pre-generated auto_examples pages.
+    "sphinx_gallery.load_style",
+]
 
 exclude_patterns = []
 

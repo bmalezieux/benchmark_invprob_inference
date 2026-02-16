@@ -19,18 +19,19 @@ This loads PyTorch with GPU support and Python 3. Check your cluster's documenta
 Installation
 ~~~~~~~~~~~~
 
-Install the required Python packages (first time only):
-
-.. code-block:: bash
-
-   pip install deepinv benchopt
-
 Clone the benchmark repository:
 
 .. code-block:: bash
 
    git clone https://github.com/bmalezieux/benchmark_invprob_inference.git
    cd benchmark_invprob_inference
+
+Install BenchOpt and the benchmark package:
+
+.. code-block:: bash
+
+   pip install benchopt
+   pip install .
 
 Running the Benchmark
 ~~~~~~~~~~~~~~~~~~~~~
