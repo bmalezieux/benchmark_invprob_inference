@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import os
 from pathlib import Path
+from astropy.io import fits
 
 from benchopt import BaseDataset
 from benchopt import config
@@ -88,17 +89,24 @@ class Dataset(BaseDataset):
             data_path = Path(config.get_data_path(key="radio_interferometry"))
             data_path.mkdir(parents=True, exist_ok=True)
 
+            fits_name = config.get("dataset.radio_interferometry.fits_name", None)
+
+            if fits_name is None:
+                raise ValueError("fits_name is not set in the config.")
+
             # Cache directory for MS files
             ms_cache_dir = data_path / "meerkat_cache"
-            gt_path = ms_cache_dir / f"image_{self.image_size}.npy"
+            gt_path = ms_cache_dir / fits_name
             
             if gt_path.exists():
-                 img_np = np.load(gt_path)
+                 img = fits.open(gt_path)
+                 img_np = img[0].data
+                 img.close()
                  img = torch.from_numpy(img_np)
             else:
                 # Ensure file is downloaded
                 load_cached_example(
-                    "m1_n.fits",
+                    fits_name,
                     cache_dir=data_path, 
                     grayscale=True,
                     device="cpu",
@@ -106,11 +114,13 @@ class Dataset(BaseDataset):
                 
                 # Fallback: Load and resize using shared utility
                 from benchmark_utils.radio_utils import load_and_resize_image
-                fits_path = data_path / "m1_n.fits"
+                fits_path = data_path / fits_name
                 img_np = load_and_resize_image(fits_path, self.image_size)
                 
                 img = torch.from_numpy(img_np)
-                img = torch.clamp(img, 0, 1)
+                #img = torch.clamp(img, 0, 1)
+
+            img_for_hash = img
 
             # Ensure (1, C, H, W)
             if img.ndim == 3:
@@ -119,18 +129,12 @@ class Dataset(BaseDataset):
             ground_truth = img.to(device)
             _, _, h, w = ground_truth.shape
 
-            # Simulation parameters
-            pixel_size_arcsec = 1.0
-
             # Get path to visibilities
             ms_path = get_meerkat_visibilities_path(
-                img, # This must match the image used for generation! 
+                img_for_hash, # This must match the image used for generation! 
                      # If we resize here, we must use resized image for hash.
                 ms_cache_dir,
-                pixel_size_arcsec=pixel_size_arcsec,
-                start_frequency_hz=100e6,
-                number_of_time_steps=512,
-                integral_time=7.997
+                fits_name,
             )
 
             if not ms_path.exists():
@@ -142,7 +146,7 @@ class Dataset(BaseDataset):
             # Create Physics Operator
             imager_config = DirtyImagerConfig(
                 imaging_npixel=self.image_size,
-                imaging_cellsize=np.deg2rad(pixel_size_arcsec / 3600.0), # get_cellsize()
+                imaging_cellsize=np.deg2rad(1 / 3600.0), # get_cellsize()
                 combine_across_frequencies=False
             )
             
