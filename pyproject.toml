@@ -7,11 +7,13 @@ requires-python = ">=3.10"
 dependencies = [
     "benchopt>=1.7.0",
     "deepinv @ git+https://github.com/deepinv/deepinv.git@main",
-    "numpy>=2.2.0",
+    "numpy>=1.24,<2.0",
     "torch>=2.7.0",
     "python-casacore>=3.7.0",
-    "astropy>=7.2.0",
+    "astropy>=6.1,<7",
     "torchkbnufft>=1.5.0",
+    "submitit>=1.5.4",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
