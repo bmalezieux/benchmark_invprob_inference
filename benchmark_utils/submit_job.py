@@ -47,7 +47,11 @@ def resolve_image_path(config: dict, image_override: str | None) -> Path:
     return image_path
 
 
-def run_simulation(config: dict, image_override: str | None = None) -> None:
+def run_simulation(
+    config: dict,
+    config_path: str,
+    image_override: str | None = None,
+) -> None:
     """Run generation inside the container (local or compute node)."""
     project_root = get_project_root()
     image_path = resolve_image_path(config, image_override)
@@ -80,17 +84,9 @@ def run_simulation(config: dict, image_override: str | None = None) -> None:
         str(image_path),
         "python",
         "benchmark_utils/generate_radio_data.py",
-        "--data_path",
-        config["job"]["data_path"],
+        "--config",
+        config_path,
     ]
-
-    if config["job"].get("use_gpus"):
-        cmd.append("--use_gpus")
-
-    image_sizes = config["job"].get("image_size", [])
-    if image_sizes:
-        cmd.append("--image_size")
-        cmd.extend(str(size) for size in image_sizes)
 
     print(f"Running command: {' '.join(cmd)}", flush=True)
     # Stream logs directly to Slurm output/error files.
@@ -99,7 +95,11 @@ def run_simulation(config: dict, image_override: str | None = None) -> None:
         raise RuntimeError(f"Simulation failed with code {result.returncode}")
 
 
-def submit_slurm_job(config: dict, image_override: str | None = None) -> None:
+def submit_slurm_job(
+    config: dict,
+    config_path: str,
+    image_override: str | None = None,
+) -> None:
     try:
         import submitit
     except ImportError as exc:
@@ -155,7 +155,7 @@ def submit_slurm_job(config: dict, image_override: str | None = None) -> None:
 
     executor.update_parameters(**kwargs)
     print(f"Submitting Slurm job with parameters: {kwargs}")
-    job = executor.submit(run_simulation, config, image_override)
+    job = executor.submit(run_simulation, config, config_path, image_override)
     print(f"Submitted job {job.job_id}, waiting for completion...")
 
     poll_interval_seconds = int(slurm_conf.get("poll_interval_seconds", 30))
@@ -230,9 +230,9 @@ def main() -> None:
 
     if args.local:
         print("Running locally...")
-        run_simulation(config, args.image_path)
+        run_simulation(config, str(config_path), args.image_path)
     else:
-        submit_slurm_job(config, args.image_path)
+        submit_slurm_job(config, str(config_path), args.image_path)
 
 
 if __name__ == "__main__":
