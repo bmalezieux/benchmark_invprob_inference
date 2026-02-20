@@ -20,12 +20,11 @@ singularity:
 slurm:
   folder: "debug_output/slurm_logs"
   job_name: "karabo_simulator"
-  account: "hfk@v100"
   nodes: 1
   ntasks_per_node: 1
   cpus_per_task: 40
   gres: "gpu:4"
-  time: "00:10:00"
+  time: 600
   hint: "nomultithread"
   account: # Setup your account here
   constraint: "v100-32g"

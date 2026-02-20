@@ -49,7 +49,6 @@ def resolve_image_path(config: dict, image_override: str | None) -> Path:
 
 def run_simulation(
     config: dict,
-    config_path: str,
     image_override: str | None = None,
 ) -> None:
     """Run generation inside the container (local or compute node)."""
@@ -70,6 +69,7 @@ def run_simulation(
 
     container_cache = f"{mount_point}/debug_output/cache"
     container_mpl = f"{mount_point}/debug_output/mpl_cache"
+    config_path = f"{mount_point}/install_scripts/config_slurm.yaml"
 
     cmd = [
         runtime,
@@ -97,7 +97,6 @@ def run_simulation(
 
 def submit_slurm_job(
     config: dict,
-    config_path: str,
     image_override: str | None = None,
 ) -> None:
     try:
@@ -155,7 +154,7 @@ def submit_slurm_job(
 
     executor.update_parameters(**kwargs)
     print(f"Submitting Slurm job with parameters: {kwargs}")
-    job = executor.submit(run_simulation, config, config_path, image_override)
+    job = executor.submit(run_simulation, config, image_override)
     print(f"Submitted job {job.job_id}, waiting for completion...")
 
     poll_interval_seconds = int(slurm_conf.get("poll_interval_seconds", 30))
@@ -230,9 +229,9 @@ def main() -> None:
 
     if args.local:
         print("Running locally...")
-        run_simulation(config, str(config_path), args.image_path)
+        run_simulation(config, args.image_path)
     else:
-        submit_slurm_job(config, str(config_path), args.image_path)
+        submit_slurm_job(config, args.image_path)
 
 
 if __name__ == "__main__":
