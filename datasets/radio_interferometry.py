@@ -101,10 +101,12 @@ class Dataset(BaseDataset):
             gt_path = ms_cache_dir / fits_name
             
             if gt_path.exists():
-                 img = fits.open(gt_path)
-                 img_np = img[0].data
-                 img.close()
-                 img = torch.from_numpy(img_np)
+                img = fits.open(gt_path)
+                img_np = img[0].data
+                img.close()
+                if not img_np.dtype.isnative:
+                    img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
+                img = torch.from_numpy(img_np)
             else:
                 # Ensure file is downloaded
                 load_cached_example(
@@ -118,6 +120,8 @@ class Dataset(BaseDataset):
                 from benchmark_utils.radio_utils import load_and_resize_image
                 fits_path = data_path / fits_name
                 img_np = load_and_resize_image(fits_path, self.image_size)
+                if not img_np.dtype.isnative:
+                    img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
                 
                 img = torch.from_numpy(img_np)
                 #img = torch.clamp(img, 0, 1)
