@@ -128,7 +128,6 @@ def generate_meerkat_visibilities(
     fits_file,
     image: np.ndarray,
     cache_dir: Path,
-    integral_time: float = 7.997, # 7.997 sec integration
     use_gpus: bool = False,
     number_of_time_steps: int = 256,
     start_frequency_hz: float = 100e6,
@@ -136,7 +135,8 @@ def generate_meerkat_visibilities(
     number_of_channels: int = 12,
     pos_ra: float = 155.66367,
     pos_dec: float = -30.7130,
-    random_position: bool = False
+    random_position: bool = False,
+    add_noise: bool = False
 ):
     """
     Generate visibilities for MeerKAT.
@@ -187,7 +187,7 @@ def generate_meerkat_visibilities(
         frequency_increment_hz=frequency_increment_hz,
     )
 
-    if cfg.add_noise:
+    if add_noise:
         simulation = InterferometerSimulation(
             channel_bandwidth_hz=frequency_increment_hz,
             pol_mode="Scalar",  # Scalar = 1pol / Full = 4 pol

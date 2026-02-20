@@ -2,14 +2,15 @@ job:
   fits_name: "m1_n.fits"
   pos_ra: 155.66367
   pos_dec: -30.7130
-  random_position: true
+  random_position: True
   image_size: [256]
   data_path: "./data/radio_interferometry"
-  use_gpus: true
+  use_gpus: True
   number_of_time_steps: 512
   start_frequency_hz: 100e6
   end_frequency_hz: 120e6
   number_of_channels: 12
+  add_noise: False
 
 singularity:
   image_path: "karabo.sif"  # Relative to project root

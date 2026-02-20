@@ -69,7 +69,7 @@ def run_simulation(
 
     container_cache = f"{mount_point}/debug_output/cache"
     container_mpl = f"{mount_point}/debug_output/mpl_cache"
-    config_path = f"{mount_point}/install_scripts/config_slurm.yaml"
+    config_path = f"{working_dir}/install_scripts/config_slurm.yaml"
 
     cmd = [
         runtime,

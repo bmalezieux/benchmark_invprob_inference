@@ -14,14 +14,15 @@ def generate_data_for_size(cfg, image_size):
     """Generate data for a specific image size."""
     data_path = cfg.data_path
     fits_name = cfg.fits_name
-    pos_ra = cfg.pos_ra
-    pos_dec = cfg.pos_dec
-    random_position = cfg.random_position
-    use_gpus = cfg.use_gpus
-    number_of_time_steps = cfg.number_of_time_steps
-    start_frequency_hz = cfg.start_frequency_hz
-    end_frequency_hz = cfg.end_frequency_hz
-    number_of_channels = cfg.number_of_channels 
+    pos_ra = float(cfg.pos_ra)
+    pos_dec = float(cfg.pos_dec)
+    random_position = bool(cfg.random_position)
+    use_gpus = bool(cfg.use_gpus)
+    number_of_time_steps = int(cfg.number_of_time_steps)
+    start_frequency_hz = float(cfg.start_frequency_hz)
+    end_frequency_hz = float(cfg.end_frequency_hz)
+    number_of_channels = int(cfg.number_of_channels)
+    add_noise = bool(cfg.add_noise)
 
     
     # Cache directory
@@ -60,7 +61,8 @@ def generate_data_for_size(cfg, image_size):
         number_of_channels=number_of_channels,
         pos_ra=pos_ra,
         pos_dec=pos_dec,
-        random_position=random_position
+        random_position=random_position,
+        add_noise=add_noise
     )
     
     # Cache the ground truth image
@@ -83,7 +85,7 @@ if __name__ == "__main__":
     # Check if GPU is available 
     # In karabo env, we assume cpu usually, or if torch is missing we definitely use cpu
     # But this script is running in karabo env WITHOUT torch.
-    use_gpus = cfg.use_gpus
+    use_gpus = bool(cfg.use_gpus)
     print(f"Running generation with use_gpus={use_gpus}")
 
     main_generation_loop(cfg)
