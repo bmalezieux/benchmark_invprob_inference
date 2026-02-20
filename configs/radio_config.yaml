@@ -3,6 +3,7 @@ objective:
 
 dataset:
   - radio_interferometry:
+      fits_name : "m1_n.fits"
       image_size: 256
       noise_level: 0.1
 

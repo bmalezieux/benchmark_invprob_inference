@@ -47,7 +47,10 @@ def resolve_image_path(config: dict, image_override: str | None) -> Path:
     return image_path
 
 
-def run_simulation(config: dict, image_override: str | None = None) -> None:
+def run_simulation(
+    config: dict,
+    image_override: str | None = None,
+) -> None:
     """Run generation inside the container (local or compute node)."""
     project_root = get_project_root()
     image_path = resolve_image_path(config, image_override)
@@ -66,6 +69,7 @@ def run_simulation(config: dict, image_override: str | None = None) -> None:
 
     container_cache = f"{mount_point}/debug_output/cache"
     container_mpl = f"{mount_point}/debug_output/mpl_cache"
+    config_path = f"{working_dir}/install_scripts/config_slurm.yaml"
 
     cmd = [
         runtime,
@@ -80,17 +84,9 @@ def run_simulation(config: dict, image_override: str | None = None) -> None:
         str(image_path),
         "python",
         "benchmark_utils/generate_radio_data.py",
-        "--data_path",
-        config["job"]["data_path"],
+        "--config",
+        config_path,
     ]
-
-    if config["job"].get("use_gpus"):
-        cmd.append("--use_gpus")
-
-    image_sizes = config["job"].get("image_size", [])
-    if image_sizes:
-        cmd.append("--image_size")
-        cmd.extend(str(size) for size in image_sizes)
 
     print(f"Running command: {' '.join(cmd)}", flush=True)
     # Stream logs directly to Slurm output/error files.
@@ -99,7 +95,10 @@ def run_simulation(config: dict, image_override: str | None = None) -> None:
         raise RuntimeError(f"Simulation failed with code {result.returncode}")
 
 
-def submit_slurm_job(config: dict, image_override: str | None = None) -> None:
+def submit_slurm_job(
+    config: dict,
+    image_override: str | None = None,
+) -> None:
     try:
         import submitit
     except ImportError as exc:
