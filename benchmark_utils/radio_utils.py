@@ -31,16 +31,25 @@ def load_and_resize_image(image_path, image_size):
     np.ndarray
         The resized image of shape (C, H, W) in [0, 1].
     """
-    with fits.open(image_path) as hdul:
-        img = hdul[0].data
+    with fits.open(image_path, memmap=False) as hdul:
+        img = np.array(hdul[0].data, dtype=np.float32, copy=True)
 
-        # Normalize to [0, 1]
-        if img.max() > 1.0:
-            img /= img.max()
+    img = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    max_val = float(np.max(img))
+
+    # Normalize to [0, 1]
+    if max_val > 1.0:
+        img = img / max_val
+
+    img = np.squeeze(img)
 
     # Ensure (C, H, W)
     if img.ndim == 2:
         img = img[np.newaxis, ...]
+    elif img.ndim != 3:
+        raise ValueError(
+            f"Unexpected FITS image shape {img.shape}, expected 2D or 3D after squeeze."
+        )
     
     c, h, w = img.shape
     resized_img = img.copy()
@@ -49,8 +58,8 @@ def load_and_resize_image(image_path, image_size):
         zoom_factors = (1, image_size / h, image_size / w)
         resized_img = zoom(img, zoom_factors, order=3)
         resized_img = np.clip(resized_img, 0, 1)
-        
-    return resized_img
+
+    return np.ascontiguousarray(resized_img, dtype=np.float32)
 
 '''def get_meerkat_visibilities_path(
     image: np.ndarray,
