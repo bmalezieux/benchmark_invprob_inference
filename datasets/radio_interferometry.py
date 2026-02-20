@@ -25,6 +25,7 @@ class Dataset(BaseDataset):
         'image_size': [256],
         'noise_level': [0.1],
         'seed': [42],
+        'fits_name': [None],
     }
 
     @classmethod
@@ -49,11 +50,12 @@ class Dataset(BaseDataset):
 
         return True
 
-    def __init__(self, image_size=256, noise_level=0.1, seed=42):
+    def __init__(self, image_size=256, noise_level=0.1, seed=42, fits_name=None):
         """Initialize the dataset."""
         self.image_size = image_size
         self.noise_level = noise_level
         self.seed = seed
+        self.fits_name = fits_name
 
     def get_data(self):
         """Load the data for this Dataset.
@@ -89,7 +91,7 @@ class Dataset(BaseDataset):
             data_path = Path(config.get_data_path(key="radio_interferometry"))
             data_path.mkdir(parents=True, exist_ok=True)
 
-            fits_name = config.get("dataset.radio_interferometry.fits_name", None)
+            fits_name = self.fits_name
 
             if fits_name is None:
                 raise ValueError("fits_name is not set in the config.")
