@@ -4,7 +4,7 @@ objective:
 dataset:
   - radio_interferometry:
       fits_name : "m1_n.fits"
-      image_size: 256
+      image_size: 1024
       noise_level: 0.1
 
 solver:
@@ -13,6 +13,6 @@ solver:
       denoiser_sigma: 0.1
       distribute_physics: False
       distribute_denoiser: False
-      init_method: 'zeros'
+      init_method: 'pseudo_inverse'
       step_size_scale: 0.9
       
