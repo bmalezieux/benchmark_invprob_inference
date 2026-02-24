@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import math
+import json
 from pathlib import Path
 from datetime import timedelta, timezone, datetime
 from astropy.time import Time
@@ -122,7 +123,7 @@ def image_to_skymodel(image_fits, ra_center, dec_center):
         # flux_percentile=0.0,
     )
 
-    return sky_model, max_flux, imaging_npixel
+    return sky_model, float(max_flux), float(rms), float(dynamic_range), imaging_npixel
 
 def generate_meerkat_visibilities(
     fits_file,
@@ -136,7 +137,8 @@ def generate_meerkat_visibilities(
     pos_ra: float = 155.66367,
     pos_dec: float = -30.7130,
     random_position: bool = False,
-    add_noise: bool = False
+    add_noise: bool = False,
+    noise_rms_percent: float = None,
 ):
     """
     Generate visibilities for MeerKAT.
@@ -145,6 +147,7 @@ def generate_meerkat_visibilities(
     vis_path = get_meerkat_visibilities_path(
         image, cache_dir, os.path.basename(fits_file)
     )
+    metadata_path = vis_path.with_suffix(".meta.json")
     
     if vis_path.exists():
         print(f"Loading cached visibilities from {vis_path}")
@@ -155,7 +158,9 @@ def generate_meerkat_visibilities(
 
     phase_center_ra, phase_center_dec, obs_date_time = set_phase_center(pos_ra, pos_dec, random_position, number_of_time_steps)
 
-    sky, max_flux, imaging_npixel = image_to_skymodel(fits_file, phase_center_ra, phase_center_dec)
+    sky, max_flux, image_rms, dynamic_range, imaging_npixel = image_to_skymodel(
+        fits_file, phase_center_ra, phase_center_dec
+    )
 
     cellsize = get_cellsize(sky, phase_center_ra, phase_center_dec, imaging_npixel)
     
@@ -187,7 +192,25 @@ def generate_meerkat_visibilities(
         frequency_increment_hz=frequency_increment_hz,
     )
 
+    noise_rms_used = None
     if add_noise:
+        if noise_rms_percent is None:
+            noise_rms_used = 50.0
+        else:
+            if np.isfinite(image_rms) and image_rms > 0:
+                noise_rms_used = image_rms * (noise_rms_percent / 100.0)
+            else:
+                noise_rms_used = 50.0
+                print(
+                    "Warning: image RMS is invalid for adaptive noise. "
+                    "Falling back to noise_rms=50."
+                )
+
+        print(
+            f"Noise RMS used: {noise_rms_used:.6e} "
+            f"(noise_rms_percent={noise_rms_percent})"
+        )
+
         simulation = InterferometerSimulation(
             channel_bandwidth_hz=frequency_increment_hz,
             pol_mode="Scalar",  # Scalar = 1pol / Full = 4 pol
@@ -199,8 +222,8 @@ def generate_meerkat_visibilities(
             noise_inc_freq=frequency_increment_hz,
             noise_number_freq=number_of_channels,
             noise_rms="Range",
-            noise_rms_start=50,
-            noise_rms_end=50,
+            noise_rms_start=noise_rms_used,
+            noise_rms_end=noise_rms_used,
             use_gpus=use_gpus,
         )
     else:
@@ -221,5 +244,24 @@ def generate_meerkat_visibilities(
         visibility_format="MS",
         visibility_path=str(vis_path)
     )
+
+    metadata = {
+        "imaging_cellsize": float(cellsize),
+        "imaging_npixel": int(imaging_npixel),
+        "phase_center_ra_deg": float(phase_center_ra),
+        "phase_center_dec_deg": float(phase_center_dec),
+        "start_frequency_hz": int(start_frequency_hz),
+        "frequency_increment_hz": int(frequency_increment_hz),
+        "number_of_channels": int(number_of_channels),
+        "number_of_time_steps": number_of_time_steps,
+        "add_noise": add_noise,
+        "dynamic_range": dynamic_range,
+        "max_flux": max_flux,
+        "image_rms": image_rms,
+        "noise_rms_percent": noise_rms_percent,
+        "noise_rms_used": noise_rms_used,
+    }
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f)
     
     return vis_path

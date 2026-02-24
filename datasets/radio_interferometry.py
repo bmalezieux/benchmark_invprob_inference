@@ -6,6 +6,7 @@ It uses pre-generated data from benchopt install.
 import torch
 import numpy as np
 import os
+import json
 from pathlib import Path
 from astropy.io import fits
 
@@ -148,11 +149,21 @@ class Dataset(BaseDataset):
                     f"Measurement Set file not found at {ms_path}. "
                     "Please run 'benchopt install -d radio_interferometry' to generate the data."
                 )
+
+            metadata_path = ms_path.with_suffix(".meta.json")
+            if metadata_path.exists():
+                with metadata_path.open("r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+                imaging_cellsize = float(metadata["imaging_cellsize"])
+            else:
+                raise FileNotFoundError(
+                    f"Metadata file not found for {ms_path}. Expected at {metadata_path}."
+                )
             
             # Create Physics Operator
             imager_config = DirtyImagerConfig(
                 imaging_npixel=self.image_size,
-                imaging_cellsize=np.deg2rad(1 / 3600.0), # get_cellsize()
+                imaging_cellsize=imaging_cellsize,
                 combine_across_frequencies=False
             )
             

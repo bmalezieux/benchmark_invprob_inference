@@ -11,6 +11,7 @@ job:
   end_frequency_hz: 120e6
   number_of_channels: 12
   add_noise: False
+  noise_rms_percent: 20
 
 singularity:
   image_path: "karabo.sif"  # Relative to project root
