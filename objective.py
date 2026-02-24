@@ -5,8 +5,10 @@ and optionally saves comparison figures for visual inspection.
 """
 
 import torch
+from pathlib import Path
 from benchopt import BaseObjective
 from deepinv.loss.metric import PSNR
+from astropy.io import fits
 
 from benchmark_utils import save_comparison_figure
 
@@ -138,6 +140,13 @@ class Objective(BaseObjective):
                 filename=f"eval_{self.evaluation_count:04d}.png",
                 evaluation_count=self.evaluation_count,
             )
+
+            reconstruction_np = (
+                reconstruction.detach().cpu().to(torch.float32).numpy().squeeze()
+            )
+            fits_path = Path(output_dir) / f"eval_{self.evaluation_count:04d}_reconstruction.fits"
+            fits_path.parent.mkdir(parents=True, exist_ok=True)
+            fits.PrimaryHDU(reconstruction_np).writeto(fits_path, overwrite=True)
 
         # Return value (primary metric for stopping criterion) and additional metrics
         result = dict(value=-psnr, psnr=psnr)
