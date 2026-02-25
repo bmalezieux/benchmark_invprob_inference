@@ -99,33 +99,35 @@ class Dataset(BaseDataset):
 
             # Cache directory for MS files
             ms_cache_dir = data_path / "meerkat_cache"
-            gt_path = ms_cache_dir / fits_name
-            
-            if gt_path.exists():
-                img = fits.open(gt_path)
-                img_np = img[0].data
-                img.close()
-                if not img_np.dtype.isnative:
-                    img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
-                img = torch.from_numpy(img_np)
+            ms_cache_dir.mkdir(parents=True, exist_ok=True)
+
+            fits_stem = Path(fits_name).stem
+            cached_resized_fits_path = ms_cache_dir / f"{fits_stem}_{self.image_size}.fits"
+
+            from benchmark_utils.radio_utils import load_and_resize_image
+
+            if cached_resized_fits_path.exists():
+                # Reuse cached FITS already resized to the requested image_size.
+                fits_path = cached_resized_fits_path
             else:
-                # Ensure file is downloaded
+                # Ensure source FITS is available locally, then resize and cache it.
                 load_cached_example(
                     fits_name,
-                    cache_dir=data_path, 
+                    cache_dir=data_path,
                     grayscale=True,
                     device="cpu",
                 )
-                
-                # Fallback: Load and resize using shared utility
-                from benchmark_utils.radio_utils import load_and_resize_image
-                fits_path = data_path / fits_name
-                img_np = load_and_resize_image(fits_path, self.image_size)
-                if not img_np.dtype.isnative:
-                    img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
-                
-                img = torch.from_numpy(img_np)
-                #img = torch.clamp(img, 0, 1)
+
+                source_fits_path = data_path / fits_name
+                img_np = load_and_resize_image(source_fits_path, self.image_size)
+                fits.PrimaryHDU(img_np).writeto(cached_resized_fits_path, overwrite=True)
+                fits_path = cached_resized_fits_path
+
+            img_np = load_and_resize_image(fits_path, self.image_size)
+            if not img_np.dtype.isnative:
+                img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
+
+            img = torch.from_numpy(img_np)
 
             img_for_hash = img
 

@@ -50,11 +50,16 @@ def generate_data_for_size(cfg, image_size):
         print(f"Could not load/process example image: {e}")
         return
 
+    # Materialize resized image as FITS and use it for simulation input.
+    fits_stem = Path(fits_name).stem
+    resized_fits_path = ms_cache_dir / f"{fits_stem}_{image_size}.fits"
+    fits.PrimaryHDU(resized_img).writeto(resized_fits_path, overwrite=True)
+
     print(f"Generating data for image size {image_size} with use_gpus={use_gpus}")
     
     # Generate visibilities
     vis_path = generate_meerkat_visibilities(
-        fits_file,
+        resized_fits_path,
         resized_img,
         ms_cache_dir,
         use_gpus=use_gpus,
@@ -68,11 +73,8 @@ def generate_data_for_size(cfg, image_size):
         add_noise=add_noise,
         noise_rms_percent=noise_rms_percent,
     )
-    
-    # Cache the ground truth image
-    gt_path = ms_cache_dir / fits_name
-    fits.PrimaryHDU(resized_img).writeto(gt_path, overwrite=True)
-    print(f"Ground truth cached at: {gt_path}")
+
+    print(f"Ground truth cached at: {resized_fits_path}")
 
     print(f"Visibilities ready for size {image_size}: {vis_path}")
 
