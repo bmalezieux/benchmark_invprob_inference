@@ -12,6 +12,7 @@ from karabo.simulation.observation import Observation
 from karabo.simulation.sky_model import SkyModel, get_cellsize
 from karabo.simulation.telescope import Telescope
 from karabo.simulator_backend import SimulatorBackend
+from karabo.calibration.noise_rms import ska_low_noise_rms
 
 from benchmark_utils.radio_utils import get_meerkat_visibilities_path, load_config, MEERKAT_LOCATION, is_source_visible, draw_random_pointing
 
@@ -210,6 +211,17 @@ def generate_meerkat_visibilities(
             f"Noise RMS used: {noise_rms_used:.6e} "
             f"(noise_rms_percent={noise_rms_percent})"
         )
+
+        rms_start = ska_low_noise_rms(freq_hz=start_frequency_hz,
+                                bandwidth_hz=frequency_increment_hz,
+                                integration_time_s=number_of_time_steps * 7.997)
+
+        rms_end = ska_low_noise_rms(freq_hz=end_frequency_hz,
+                                        bandwidth_hz=frequency_increment_hz,
+                                        integration_time_s=number_of_time_steps * 7.997)
+        
+        print(f"RMS start frequency ({start_frequency_hz/1e6} MHz): {rms_start} Jy/beam", flush=True)
+        print(f"RMS end frequency ({end_frequency_hz/1e6} MHz): {rms_end} Jy/beam", flush=True)
 
         simulation = InterferometerSimulation(
             channel_bandwidth_hz=frequency_increment_hz,
