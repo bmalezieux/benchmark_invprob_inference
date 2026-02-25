@@ -138,12 +138,11 @@ class Dataset(BaseDataset):
             ground_truth = img.to(device)
             _, _, h, w = ground_truth.shape
 
-            # Get path to visibilities
+            # Get path to visibilities.
             ms_path = get_meerkat_visibilities_path(
-                img_for_hash, # This must match the image used for generation! 
-                     # If we resize here, we must use resized image for hash.
+                img_for_hash,
                 ms_cache_dir,
-                fits_name,
+                f"{fits_stem}_{self.image_size}.fits",
             )
 
             if not ms_path.exists():
