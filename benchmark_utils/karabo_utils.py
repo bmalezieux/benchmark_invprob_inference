@@ -88,7 +88,6 @@ def set_phase_center(pos_ra, pos_dec, random_position, number_of_time_steps, min
 def image_to_skymodel(image_fits, ra_center, dec_center):
 
     data_fits = fits.open(image_fits)
-    imaging_npixel = data_fits[0].data.shape[0]
     input_image_data = data_fits[0].data
 
     # Compute dynamic range of input image
@@ -110,7 +109,7 @@ def image_to_skymodel(image_fits, ra_center, dec_center):
     print(f"Max flux: {max_flux:.6e}")
     print(f"RMS: {rms:.6e}")
     print(
-        f"  Dynamic Range: {dynamic_range:.2f} ({10*np.log10(dynamic_range):.2f} dB)"
+        f"Dynamic Range: {dynamic_range:.2f} ({10*np.log10(dynamic_range):.2f} dB)"
     )
 
     data_fits.close()
@@ -123,7 +122,7 @@ def image_to_skymodel(image_fits, ra_center, dec_center):
         # flux_percentile=0.0,
     )
 
-    return sky_model, float(max_flux), float(rms), float(dynamic_range), imaging_npixel
+    return sky_model, float(max_flux), float(rms), float(dynamic_range)
 
 def generate_meerkat_visibilities(
     fits_file,
@@ -148,6 +147,7 @@ def generate_meerkat_visibilities(
         image, cache_dir, os.path.basename(fits_file)
     )
     metadata_path = vis_path.with_suffix(".meta.json")
+    imaging_npixel = image.shape[-1]
     
     if vis_path.exists():
         print(f"Loading cached visibilities from {vis_path}")
@@ -158,7 +158,7 @@ def generate_meerkat_visibilities(
 
     phase_center_ra, phase_center_dec, obs_date_time = set_phase_center(pos_ra, pos_dec, random_position, number_of_time_steps)
 
-    sky, max_flux, image_rms, dynamic_range, imaging_npixel = image_to_skymodel(
+    sky, max_flux, image_rms, dynamic_range = image_to_skymodel(
         fits_file, phase_center_ra, phase_center_dec
     )
 
