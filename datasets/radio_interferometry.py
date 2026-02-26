@@ -107,10 +107,10 @@ class Dataset(BaseDataset):
             from benchmark_utils.radio_utils import load_and_resize_image
 
             if cached_resized_fits_path.exists():
-                # Reuse cached FITS already resized to the requested image_size.
-                fits_path = cached_resized_fits_path
+                # Cached FITS is already normalized and resized — load directly.
+                with fits.open(cached_resized_fits_path, memmap=False) as hdul:
+                    img_np = np.array(hdul[0].data, dtype=np.float32, copy=True)
             else:
-                # Ensure source FITS is available locally, then resize and cache it.
                 load_cached_example(
                     fits_name,
                     cache_dir=data_path,
@@ -121,9 +121,7 @@ class Dataset(BaseDataset):
                 source_fits_path = data_path / fits_name
                 img_np = load_and_resize_image(source_fits_path, self.image_size)
                 fits.PrimaryHDU(img_np).writeto(cached_resized_fits_path, overwrite=True)
-                fits_path = cached_resized_fits_path
 
-            img_np = load_and_resize_image(fits_path, self.image_size)
             if not img_np.dtype.isnative:
                 img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
 
