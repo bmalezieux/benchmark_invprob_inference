@@ -53,7 +53,7 @@ def generate_data_for_size(cfg, image_size):
     # Materialize resized image as FITS and use it for simulation input.
     fits_stem = Path(fits_name).stem
     resized_fits_path = ms_cache_dir / f"{fits_stem}_{image_size}.fits"
-    fits.PrimaryHDU(resized_img).writeto(resized_fits_path, overwrite=True)
+    fits.PrimaryHDU(data=resized_img, header=fits.getheader(fits_file)).writeto(resized_fits_path, overwrite=True)
 
     print(f"Generating data for image size {image_size} with use_gpus={use_gpus}")
     
