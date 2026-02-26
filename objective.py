@@ -24,8 +24,7 @@ class Objective(BaseObjective):
     # the Objective and the Solver.
     def set_data(
         self,
-        ground_truth,
-        measurement,
+        dataloader,
         physics,
         min_pixel=0.0,
         max_pixel=1.0,
@@ -36,10 +35,8 @@ class Objective(BaseObjective):
 
         Parameters
         ----------
-        ground_truth : torch.Tensor
-            Ground truth image.
-        measurement : torch.Tensor or TensorList
-            Noisy measurements.
+        dataloader : DataLoader
+            PyTorch DataLoader containing ground truth and measurements.
         physics : Physics
             Forward operator.
         min_pixel : float, optional
@@ -51,12 +48,10 @@ class Objective(BaseObjective):
         num_operators : int, optional
             Number of operators in stacked physics.
         """
-        self.ground_truth = ground_truth
-        self.measurement = measurement
+        self.dataloader = dataloader
         self.physics = physics
-        self.ground_truth_shape = (
-            ground_truth_shape if ground_truth_shape is not None else ground_truth.shape
-        )
+
+        self.ground_truth_shape = ground_truth_shape
         self.num_operators = num_operators if num_operators is not None else 1
         self.psnr_metric = PSNR(max_pixel=max_pixel)
         # self.ssim_metric = SSIM(max_pixel=max_pixel)
@@ -70,10 +65,10 @@ class Objective(BaseObjective):
         Returns
         -------
         dict
-            Dictionary with measurement, physics, and metadata.
+            Dictionary with dataloader, physics, and metadata.
         """
         return dict(
-            measurement=self.measurement,
+            dataloader=self.dataloader,
             physics=self.physics,
             ground_truth_shape=self.ground_truth_shape,
             num_operators=self.num_operators,
@@ -81,13 +76,13 @@ class Objective(BaseObjective):
             max_pixel=self.max_pixel,
         )
 
-    def evaluate_result(self, reconstruction, name, **kwargs):
+    def evaluate_result(self, reconstructions, name, **kwargs):
         """Compute the objective value(s) given the output of a solver.
 
         Parameters
         ----------
-        reconstruction : torch.Tensor
-            Reconstructed image from solver.
+        reconstructions : list of torch.Tensor
+            List of reconstructed images from solver (one per batch).
         name : str
             Name identifier for the solver/configuration.
         **kwargs : dict
@@ -108,39 +103,44 @@ class Objective(BaseObjective):
             'psnr', and optional GPU/step metrics.
         """
         with torch.no_grad():
-            # Ensure reconstruction is on the same device as ground truth
-            reconstruction = reconstruction.to(self.ground_truth.device)
+            # Evaluate each batch individually and compute average metrics
+            local_psnr_sum = 0.0
+            local_count = 0
+            first_ground_truth = None
+            first_reconstruction = None
 
-            psnr_tensor = self.psnr_metric(reconstruction, self.ground_truth)
-            # ssim_tensor = self.ssim_metric(reconstruction, self.ground_truth)
+            # Load ground truths fresh from dataloader
+            for batch_idx, (ground_truth, _) in enumerate(self.dataloader):
+                reconstruction = reconstructions[batch_idx]
 
-            # Handle batch case - take mean across batch dimension
-            psnr = (
-                psnr_tensor.mean().item()
-                if psnr_tensor.numel() > 1
-                else psnr_tensor.item()
-            )
-            # ssim = (
-            #     ssim_tensor.mean().item()
-            #     if ssim_tensor.numel() > 1
-            #     else ssim_tensor.item()
-            # )
+                # Save first image for visualization
+                if batch_idx == 0:
+                    first_ground_truth = ground_truth
+                    first_reconstruction = reconstruction
 
-            # Save comparison figure
-            output_dir = "evaluation_output/" + name.replace("/", "_").replace("..", "")
-            self.evaluation_count += 1
-            save_comparison_figure(
-                self.ground_truth,
-                reconstruction,
-                # metrics={'psnr': psnr, 'ssim': ssim},
-                metrics={"psnr": psnr},
-                output_dir=output_dir,
-                filename=f"eval_{self.evaluation_count:04d}.png",
-                evaluation_count=self.evaluation_count,
-            )
+                # Ensure reconstruction is on the same device as ground truth
+                reconstruction = reconstruction.to(ground_truth.device)
+
+                batch_psnr = self.psnr_metric(reconstruction, ground_truth).item()
+                local_psnr_sum += batch_psnr * ground_truth.shape[0]
+                local_count += ground_truth.shape[0]
+            avg_psnr = local_psnr_sum / local_count if local_count > 0 else 0.0
+
+        # Save comparison figure using first image
+        output_dir = "evaluation_output/" + name.replace("/", "_").replace("..", "")
+        self.evaluation_count += 1
+        save_comparison_figure(
+            first_ground_truth,
+            first_reconstruction,
+            # metrics={'psnr': psnr, 'ssim': ssim},
+            metrics={"psnr": avg_psnr},
+            output_dir=output_dir,
+            filename=f"eval_{self.evaluation_count:04d}.png",
+            evaluation_count=self.evaluation_count,
+        )
 
         # Return value (primary metric for stopping criterion) and additional metrics
-        result = dict(value=-psnr, psnr=psnr)
+        result = dict(value=-avg_psnr, psnr=avg_psnr)
 
         # Add all non-None metrics from kwargs to result
         for key, value in kwargs.items():
@@ -159,7 +159,13 @@ class Objective(BaseObjective):
         dict
             Dictionary with a noisy version of ground truth.
         """
+        # Create noisy reconstructions for each batch
+        reconstructions = []
+        for ground_truth, _ in self.dataloader:
+            noisy_recon = ground_truth + ground_truth.std()
+            reconstructions.append(noisy_recon)
+
         return dict(
-            reconstruction=self.ground_truth + self.ground_truth.std(),
+            reconstructions=reconstructions,
             name="test_result",
         )

@@ -115,7 +115,7 @@ class Solver(BaseSolver):
 
     def set_objective(
         self,
-        measurement,
+        dataloader,
         physics,
         ground_truth_shape,
         num_operators,
@@ -125,12 +125,12 @@ class Solver(BaseSolver):
         """Set the objective from the dataset.
 
         Args:
-            measurement: Noisy measurements (TensorList or tensor)
+            dataloader: PyTorch DataLoader containing ground truth and measurements
             physics: Forward operator (stacked physics or list or callable)
             ground_truth_shape: Shape of the ground truth tensor
             num_operators: Number of operators in the physics
         """
-        self.measurement = measurement
+        self.dataloader = dataloader
         self.physics = physics
         self.ground_truth_shape = ground_truth_shape
         self.num_operators = num_operators
@@ -172,7 +172,10 @@ class Solver(BaseSolver):
                 print("Running in non-distributed mode")
 
         self.distributed_mode = self.world_size > 1
-        self.reconstruction = torch.zeros(self.ground_truth_shape)
+        self.reconstruction = torch.zeros(
+            self.ground_truth_shape
+        )  # Will be overwritten per batch
+        self.reconstructions = []  # List to store all batch reconstructions
 
         # Initialize GPU metrics tracker (device will be set in _run_with_context)
         self.gpu_tracker = None
@@ -293,21 +296,21 @@ class Solver(BaseSolver):
 
         return step_size
 
-    def _initialize_reconstruction(self, physics, measurements, device):
+    def _initialize_reconstruction(self, physics, measurements, ground_truth, device):
         """Initialize reconstruction signal.
 
         Args:
             physics: Physics operator (can be stacked or distributed)
             measurements: Measurements
+            ground_truth: Ground truth tensor (used to determine signal shape)
             device: Device to use
-            ctx: Optional distributed context
 
         Returns:
             Initialized reconstruction tensor
         """
         with torch.no_grad():
             return initialize_reconstruction(
-                signal_shape=self.ground_truth_shape,
+                signal_shape=ground_truth.shape,
                 operator=physics,
                 measurements=measurements,
                 device=device,
@@ -317,20 +320,18 @@ class Solver(BaseSolver):
     def _run_pnp_iterations(
         self, prior, data_fidelity, physics, measurements, step_size, cb
     ):
-        """Run PnP iterations.
+        """Run PnP iterations over all batches.
 
         Args:
-            x: Initial reconstruction
             prior: PnP prior
             data_fidelity: L2 data fidelity
             physics: Physics operators
-            measurements: Measurements
+            measurements: List of measurements (one per batch)
             step_size: Step size for gradient descent
             cb: Callback function
-            ctx: Optional distributed context
 
         Returns:
-            Final reconstruction
+            None (updates self.reconstructions in-place)
         """
         with torch.no_grad():
 
@@ -338,7 +339,6 @@ class Solver(BaseSolver):
                 keep_going = cb()
 
                 if self.distributed_mode and self.ctx is not None:
-                    # Synchronize stopping criterion
                     decision = torch.tensor([float(keep_going)], device=self.device)
                     self.ctx.broadcast(decision, src=0)
                     keep_going = bool(decision.item())
@@ -346,49 +346,56 @@ class Solver(BaseSolver):
                 if not keep_going:
                     break
 
-                # Reset iteration tracking for new iteration
-                self.gpu_tracker.reset_iteration_tracking()
+                # Process one PnP step for all batches
+                for batch_idx in range(len(measurements)):
+                    # Use measurement (already on correct device)
+                    measurement = measurements[batch_idx]
 
-                # ===== GRADIENT STEP =====
-                with self.gpu_tracker.track_step("gradient"):
-                    # Data fidelity gradient step
-                    grad = data_fidelity.grad(
-                        self.reconstruction, measurements, physics
+                    # Get reconstruction for this batch (move from CPU to GPU)
+                    self.reconstruction = self.reconstructions[batch_idx].to(
+                        self.device
                     )
-                    # Gradient descent step
-                    self.reconstruction = self.reconstruction - step_size * grad
+                    self.gpu_tracker.reset_iteration_tracking()
 
-                # ===== DENOISING STEP =====
-                with self.gpu_tracker.track_step("denoise"):
+                    # Gradient step
+                    with self.gpu_tracker.track_step("gradient"):
+                        # Data fidelity gradient step
+                        grad = data_fidelity.grad(
+                            self.reconstruction, measurement, physics
+                        )
+                        # Gradient descent step
+                        self.reconstruction = self.reconstruction - step_size * grad
+
                     # Denoising step
-                    if self.denoiser_lambda_relaxation is None:
-                        self.reconstruction = prior.prox(
-                            self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                        )
-                    else:
-                        denoised_reconstruction = prior.prox(
-                            self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                        )
-                        lamda = self.denoiser_lambda_relaxation
-                        alpha = (step_size * lamda) / (1 + step_size * lamda)
-                        self.reconstruction = (
-                            1 - alpha
-                        ) * self.reconstruction + alpha * denoised_reconstruction
+                    with self.gpu_tracker.track_step("denoise"):
+                        # Denoising step
+                        if self.denoiser_lambda_relaxation is None:
+                            self.reconstruction = prior.prox(
+                                self.reconstruction, sigma_denoiser=self.denoiser_sigma
+                            )
+                        else:
+                            denoised_reconstruction = prior.prox(
+                                self.reconstruction, sigma_denoiser=self.denoiser_sigma
+                            )
+                            lamda = self.denoiser_lambda_relaxation
+                            alpha = (step_size * lamda) / (1 + step_size * lamda)
+                            self.reconstruction = (
+                                (1 - alpha) * self.reconstruction
+                                + alpha * denoised_reconstruction
+                            )
 
-                    # Clip reconstruction to valid range after denoising
-                    if self.clip_range is not None:
-                        self.reconstruction = torch.clamp(
-                            self.reconstruction, self.clip_range[0], self.clip_range[1]
-                        )
+                        # Clip reconstruction to valid range after denoising
+                        if self.clip_range is not None:
+                            self.reconstruction = torch.clamp(
+                                self.reconstruction,
+                                self.clip_range[0],
+                                self.clip_range[1],
+                            )
 
-                # Synchronize all CUDA operations and distributed processes
-                # This ensures accurate timing measurements
-                if self.device.type == "cuda":
-                    torch.cuda.synchronize(self.device)
-
-                # Capture iteration metrics after both steps complete
-                iteration_result = self.gpu_tracker.capture_iteration_result()
-                self.all_results.append(iteration_result)
+                    # Store updated reconstruction (move to CPU to save GPU memory)
+                    self.reconstructions[batch_idx] = self.reconstruction.cpu()
+                    iteration_result = self.gpu_tracker.capture_iteration_result()
+                    self.all_results.append(iteration_result)
 
     def _run_with_context(self, cb, ctx=None):
         """Run PnP with optional distributed context.
@@ -409,13 +416,8 @@ class Solver(BaseSolver):
         # Initialize GPU metrics tracker
         self.gpu_tracker = GPUMetricsTracker(device=self.device)
 
-        # Move measurement to correct device
-        if hasattr(self.measurement, "to"):
-            measurement = self.measurement.to(self.device)
-        elif isinstance(self.measurement, list):
-            measurement = TensorList([m.to(self.device) for m in self.measurement])
-        else:
-            measurement = self.measurement
+        # Initialize reconstructions list
+        self.reconstructions = []
 
         # Handle physics: can be stacked physics, factory function, or list
         if ctx is not None and self.distribute_physics:
@@ -439,38 +441,47 @@ class Solver(BaseSolver):
             if hasattr(physics, "to"):
                 physics = physics.to(self.device)
 
-        # Setup components
+        # First pass: Load data once and cache to avoid repeated I/O
+        print("Loading and caching data from dataloader...")
+        measurements = []  # List to hold measurements for all batches
+
+        for ground_truth, measurement in self.dataloader:
+            if hasattr(measurement, "to"):
+                measurement = measurement.to(self.device)
+            elif isinstance(measurement, TensorList):
+                measurement = TensorList([m.to(self.device) for m in measurement])
+            elif isinstance(measurement, list):
+                measurement = [m.to(self.device) for m in measurement]
+            else:
+                measurement = measurement
+
+            measurements.append(measurement)
+
+            # Initialize reconstruction for this batch
+            reconstruction = self._initialize_reconstruction(
+                physics, measurement, ground_truth, self.device
+            )
+            if self.clip_range is not None:
+                reconstruction = torch.clamp(
+                    reconstruction, self.clip_range[0], self.clip_range[1]
+                )
+
+            # Move to CPU initially to save GPU memory
+            self.reconstructions.append(reconstruction.cpu())
+
+        print(f"\nInitialized {len(self.reconstructions)} batches")
+
+        # Setup components once
         prior, data_fidelity = self._setup_components(self.device, ctx)
-        # cb()
         print("Components set up.")
 
         # Compute step size
         step_size = self._compute_step_size(physics, self.device)
-        # cb()
         print("Step size computed:", step_size)
-
-        # Initialize reconstruction
-        self.reconstruction = self._initialize_reconstruction(
-            physics, self.measurement, self.device
-        )
-        # cb()
-        print("Reconstruction initialized.")
-
-        # Clip initial reconstruction if requested
-        if self.clip_range is not None:
-            self.reconstruction = torch.clamp(
-                self.reconstruction, self.clip_range[0], self.clip_range[1]
-            )
-
-        # Synchronize before capturing initial state
-        if self.device.type == "cuda":
-            torch.cuda.synchronize(self.device)
-
-        print("Starting PnP iterations.")
 
         # Run PnP iterations
         self._run_pnp_iterations(
-            prior, data_fidelity, physics, measurement, step_size, cb
+            prior, data_fidelity, physics, measurements, step_size, cb
         )
 
         # Synchronize at the end of the run to ensure benchopt captures the full execution time
@@ -487,10 +498,11 @@ class Solver(BaseSolver):
         """Return the reconstruction result.
 
         Returns:
-            dict: Dictionary with 'reconstruction' key, GPU memory snapshot,
+            dict: Dictionary with 'reconstructions' key (list of tensors), GPU memory snapshot,
             and per-step metrics (gradient and denoise timing/memory)
         """
-        result = dict(reconstruction=self.reconstruction, name=self.name)
+        # Return all reconstructions (they are updated in-place during iterations)
+        result = dict(reconstructions=self.reconstructions, name=self.name)
 
         # Add GPU memory snapshot
         if self.gpu_tracker is not None:
