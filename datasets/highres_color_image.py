@@ -4,17 +4,21 @@ This dataset uses a real color image from the CBSD dataset and applies
 multiple anisotropic Gaussian blur operators with equiangular orientations.
 """
 
+import hashlib
 import os
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from benchopt import BaseDataset, config
+from deepinv.datasets import HDF5Dataset, generate_dataset
 from deepinv.distributed import DistributedContext
 from deepinv.physics import GaussianNoise, stack
 from deepinv.physics.blur import Blur, gaussian_blur
+from torch.utils.data import DataLoader, TensorDataset
 
-from benchmark_utils import load_cached_example, save_measurements_figure
+from benchmark_utils import load_cached_example
+from benchmark_utils.support_dataloader import ClampedHDF5Dataset, collate_deepinv_batch
 
 
 class Dataset(BaseDataset):
@@ -31,14 +35,26 @@ class Dataset(BaseDataset):
         "num_operators": [1, 8, 16],
         "noise_level": [0.01, 0.1],
         "seed": [42],
+        "batch_size": [1],
+        "num_workers": [4],
     }
 
-    def __init__(self, image_size=512, num_operators=1, noise_level=0.01, seed=42):
+    def __init__(
+        self,
+        image_size=512,
+        num_operators=1,
+        noise_level=0.01,
+        seed=42,
+        batch_size=1,
+        num_workers=0,
+    ):
         """Initialize the dataset."""
         self.image_size = image_size
         self.num_operators = num_operators
         self.noise_level = noise_level
         self.seed = seed
+        self.batch_size = batch_size
+        self.num_workers = num_workers
 
     def get_data(self):
         """Load the data for this Dataset.
@@ -104,6 +120,13 @@ class Dataset(BaseDataset):
                 ground_truth = img
                 print(f"Image already at target size: ({h}, {w})")
 
+            # Wrap ground_truth into a simple dataset
+            gt_cpu = ground_truth.cpu()
+            if gt_cpu.ndim == 3:
+                dataset = TensorDataset(gt_cpu.unsqueeze(0))
+            else:
+                dataset = TensorDataset(gt_cpu)
+
             # Create anisotropic Gaussian blur kernels with equiangular directions
             physics_list = []
 
@@ -139,23 +162,57 @@ class Dataset(BaseDataset):
             # Stack physics operators into a single operator
             stacked_physics = stack(*physics_list)
 
-            # Generate measurements (returns a TensorList)
-            measurement = stacked_physics(ground_truth)
+            # Generate unique dataset filename to avoid conflicts between concurrent jobs
+            # Use world_size + dataset parameters to create unique identifier
+            param_str = f"{self.image_size}_{self.num_operators}_{self.noise_level}_{self.seed}_{ctx.world_size}"
+            param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
+            dataset_filename = f"dset_{param_hash}_ws{ctx.world_size}"
 
-            for i in range(len(measurement)):
-                measurement[i] = torch.clamp(measurement[i], 0.0, 1.0)
+            # Construct the dataset path (generate_dataset appends "0.h5")
+            dataset_path = f"{data_path}/{dataset_filename}0.h5"
 
             if ctx.rank == 0:
-                # Save debug visualization
-                save_measurements_figure(
-                    ground_truth,
-                    measurement,
-                    filename="highres_color_image_measurements.png",
-                )
+                # Only generate if file doesn't exist (allows reuse across runs)
+                if not os.path.exists(dataset_path):
+                    print(f"Generating new dataset: {dataset_path}")
+                    _ = generate_dataset(
+                        train_dataset=dataset,
+                        physics=stacked_physics,
+                        save_dir=str(data_path),
+                        dataset_filename=dataset_filename,
+                        device=device,
+                        train_datapoints=1,
+                        num_workers=self.num_workers,
+                        verbose=True,
+                        supervised=True,
+                        overwrite_existing=False,  # Don't overwrite to avoid conflicts
+                    )
+                else:
+                    print(f"Reusing existing dataset: {dataset_path}")
+
+            # Synchronize all ranks before loading datasets
+            if ctx.use_dist:
+                import torch.distributed as dist
+
+                dist.barrier()
+
+            # Load HDF5Dataset - it opens the file safely in read-only mode
+            h5_dset = HDF5Dataset(path=dataset_path, train=True)
+            h5_dset = ClampedHDF5Dataset(h5_dset, min_val=0.0, max_val=1.0)
+            dataloader = DataLoader(
+                h5_dset,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
+                collate_fn=collate_deepinv_batch,
+            )
+
+            # Get the single item for metadata and visualization
+            ground_truth, _ = h5_dset[0]
+            ground_truth = ground_truth.unsqueeze(0)  # Add batch dimension
 
         return dict(
-            ground_truth=ground_truth,
-            measurement=measurement,
+            dataloader=dataloader,
             physics=stacked_physics,
             min_pixel=0.0,
             max_pixel=1.0,
