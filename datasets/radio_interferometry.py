@@ -98,7 +98,9 @@ class Dataset(BaseDataset):
                 raise ValueError("fits_name is not set in the config.")
 
             # Cache directory for MS files
-            ms_cache_dir = data_path / "meerkat_cache"
+            parts = data_path.parts
+            idx = parts.index("data")
+            ms_cache_dir = Path(*parts[idx:]) / "meerkat_cache"
             ms_cache_dir.mkdir(parents=True, exist_ok=True)
 
             fits_stem = Path(fits_name).stem
@@ -127,8 +129,6 @@ class Dataset(BaseDataset):
 
             img = torch.from_numpy(img_np)
 
-            img_for_hash = img
-
             # Ensure (1, C, H, W)
             if img.ndim == 3:
                 img = img.unsqueeze(0)
@@ -138,7 +138,7 @@ class Dataset(BaseDataset):
 
             # Get path to visibilities.
             ms_path = get_meerkat_visibilities_path(
-                img_for_hash,
+                img_np,
                 ms_cache_dir,
                 f"{fits_stem}_{self.image_size}.fits",
             )

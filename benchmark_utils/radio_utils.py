@@ -107,9 +107,9 @@ def get_meerkat_visibilities_path(
     params_hash = hashlib.md5(params_str.encode()).hexdigest()
 
     if hasattr(image, "cpu") and hasattr(image, "numpy"):
-        img_bytes = image.cpu().numpy().tobytes()
+        img_bytes = np.ascontiguousarray(image.cpu().numpy(), dtype=np.float32).tobytes()
     else:
-        img_bytes = image.tobytes()
+        img_bytes = np.ascontiguousarray(image, dtype=np.float32).tobytes()
 
     img_hash = hashlib.md5(img_bytes).hexdigest()
     full_hash = hashlib.md5((params_hash + img_hash).encode()).hexdigest()
