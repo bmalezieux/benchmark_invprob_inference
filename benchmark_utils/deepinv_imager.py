@@ -168,6 +168,7 @@ class DeepinvDirtyImager(torch.nn.Module):
             wavelength = const.c.value / freq
             uv_lambda = uv_base / wavelength
             uv_norm = (uv_lambda * cellsize_2pi).T
+            uv_norm = torch.stack((-uv_norm[1], uv_norm[0]), dim=0)
 
             samples_locs[:, start_idx:end_idx] = uv_norm
             all_visibilities[start_idx:end_idx] = visibilities[:, i]
@@ -449,9 +450,6 @@ class DeepinvDirtyImager(torch.nn.Module):
             print("psf_peak", psf_peak)
 
         back_normalized = back / psf_peak
-        back_normalized = back_normalized.transpose(-2, -1).contiguous()
-        # Flip
-        back_normalized = back_normalized.flip(-2).contiguous()
 
         if self.verbose:
             print("Backprojection min value: ", back_normalized.min().item())

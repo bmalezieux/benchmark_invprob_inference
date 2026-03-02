@@ -6,11 +6,13 @@ It uses pre-generated data from benchopt install.
 import torch
 import numpy as np
 import os
+import json
 from pathlib import Path
+from astropy.io import fits
 
 from benchopt import BaseDataset
 from benchopt import config
-from benchmark_utils.radio_utils import get_meerkat_visibilities_path
+from benchmark_utils.radio_utils import get_meerkat_visibilities_path, load_new_header
 
 
 class Dataset(BaseDataset):
@@ -24,6 +26,7 @@ class Dataset(BaseDataset):
         'image_size': [256],
         'noise_level': [0.1],
         'seed': [42],
+        'fits_name': [None],
     }
 
     @classmethod
@@ -48,11 +51,12 @@ class Dataset(BaseDataset):
 
         return True
 
-    def __init__(self, image_size=256, noise_level=0.1, seed=42):
+    def __init__(self, image_size=256, noise_level=0.1, seed=42, fits_name=None):
         """Initialize the dataset."""
         self.image_size = image_size
         self.noise_level = noise_level
         self.seed = seed
+        self.fits_name = fits_name
 
     def get_data(self):
         """Load the data for this Dataset.
@@ -88,29 +92,43 @@ class Dataset(BaseDataset):
             data_path = Path(config.get_data_path(key="radio_interferometry"))
             data_path.mkdir(parents=True, exist_ok=True)
 
+            fits_name = self.fits_name
+
+            if fits_name is None:
+                raise ValueError("fits_name is not set in the config.")
+
             # Cache directory for MS files
-            ms_cache_dir = data_path / "meerkat_cache"
-            gt_path = ms_cache_dir / f"image_{self.image_size}.npy"
-            
-            if gt_path.exists():
-                 img_np = np.load(gt_path)
-                 img = torch.from_numpy(img_np)
+            parts = data_path.parts
+            idx = parts.index("data")
+            ms_cache_dir = Path(*parts[idx:]) / "meerkat_cache"
+            ms_cache_dir.mkdir(parents=True, exist_ok=True)
+
+            fits_stem = Path(fits_name).stem
+            cached_resized_fits_path = ms_cache_dir / f"{fits_stem}_{self.image_size}.fits"
+
+            from benchmark_utils.radio_utils import load_and_resize_image
+
+            if cached_resized_fits_path.exists():
+                # Cached FITS is already normalized and resized — load directly.
+                with fits.open(cached_resized_fits_path, memmap=False) as hdul:
+                    img_np = np.array(hdul[0].data, dtype=np.float32, copy=True)
             else:
-                # Ensure file is downloaded
                 load_cached_example(
-                    "m1_n.fits",
-                    cache_dir=data_path, 
+                    fits_name,
+                    cache_dir=data_path,
                     grayscale=True,
                     device="cpu",
                 )
-                
-                # Fallback: Load and resize using shared utility
-                from benchmark_utils.radio_utils import load_and_resize_image
-                fits_path = data_path / "m1_n.fits"
-                img_np = load_and_resize_image(fits_path, self.image_size)
-                
-                img = torch.from_numpy(img_np)
-                img = torch.clamp(img, 0, 1)
+
+                source_fits_path = data_path / fits_name
+                img_np = load_and_resize_image(source_fits_path, self.image_size)
+                new_header = load_new_header(source_fits_path, self.image_size)
+                fits.PrimaryHDU(img_np, header=new_header).writeto(cached_resized_fits_path, overwrite=True)
+
+            if not img_np.dtype.isnative:
+                img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))
+
+            img = torch.from_numpy(img_np)
 
             # Ensure (1, C, H, W)
             if img.ndim == 3:
@@ -119,17 +137,11 @@ class Dataset(BaseDataset):
             ground_truth = img.to(device)
             _, _, h, w = ground_truth.shape
 
-            # Simulation parameters
-            pixel_size_arcsec = 1.0
-
-            # Get path to visibilities
+            # Get path to visibilities.
             ms_path = get_meerkat_visibilities_path(
-                img, # This must match the image used for generation! 
-                     # If we resize here, we must use resized image for hash.
+                img_np,
                 ms_cache_dir,
-                pixel_size_arcsec=pixel_size_arcsec,
-                freq_hz=1e9,
-                obs_duration=600
+                f"{fits_stem}_{self.image_size}.fits",
             )
 
             if not ms_path.exists():
@@ -137,11 +149,21 @@ class Dataset(BaseDataset):
                     f"Measurement Set file not found at {ms_path}. "
                     "Please run 'benchopt install -d radio_interferometry' to generate the data."
                 )
+
+            metadata_path = ms_path.with_suffix(".meta.json")
+            if metadata_path.exists():
+                with metadata_path.open("r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+                imaging_cellsize = float(metadata["imaging_cellsize"])
+            else:
+                raise FileNotFoundError(
+                    f"Metadata file not found for {ms_path}. Expected at {metadata_path}."
+                )
             
             # Create Physics Operator
             imager_config = DirtyImagerConfig(
                 imaging_npixel=self.image_size,
-                imaging_cellsize=np.deg2rad(pixel_size_arcsec / 3600.0),
+                imaging_cellsize=imaging_cellsize,
                 combine_across_frequencies=False
             )
             

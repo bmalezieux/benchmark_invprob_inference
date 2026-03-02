@@ -4,7 +4,7 @@ slurm_stderr_to_stdout: True  # redirect all outputs to a single log file
 slurm_additional_parameters:
   cpus-per-task: 10           # requires 10 CPUs per job
   qos: qos_gpu-dev              # Queue used for the jobs
-  account: fio@v100
+  account: # Setup your account here
   constraint: v100-32g
 slurm_setup:  # sbatch script commands added before the main job
   - module purge

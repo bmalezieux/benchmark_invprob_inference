@@ -1,7 +1,17 @@
 job:
-  image_size: [256]
+  fits_name: "m1_n.fits"
+  pos_ra: 155.66367
+  pos_dec: -30.7130
+  random_position: True
+  image_size: [1024]
   data_path: "./data/radio_interferometry"
-  use_gpus: true
+  use_gpus: True
+  number_of_time_steps: 512
+  start_frequency_hz: 1.300e9
+  end_frequency_hz: 1.320e9
+  number_of_channels: 12
+  add_noise: False
+  noise_rms_percent: 20
 
 singularity:
   image_path: "karabo.sif"  # Relative to project root
@@ -16,7 +26,7 @@ slurm:
   ntasks_per_node: 1
   cpus_per_task: 40
   gres: "gpu:4"
-  time: "00:10:00"
+  time: 60 # in minutes
   hint: "nomultithread"
   account: # Setup your account here
   constraint: "v100-32g"
