@@ -5,11 +5,16 @@ including visualization and data loading helpers.
 """
 
 from pathlib import Path
-
 import matplotlib.pyplot as plt
-import torch
-from deepinv.models import DRUNet
-from deepinv.utils.demo import download_example, load_image
+try:
+    import torch
+    from deepinv.utils.demo import download_example, load_image
+    from deepinv.models import DRUNet
+except ImportError:
+    torch = None
+    download_example = None
+    load_image = None
+    DRUNet = None
 
 
 def tensor_to_numpy(tensor):
@@ -212,7 +217,7 @@ def load_cached_example(name, cache_dir=None, **kwargs):
         return load_image(str(cached_file), **kwargs)
 
 
-def create_drunet_denoiser(ground_truth_shape, device="cpu", dtype=torch.float32):
+def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=None):
     """Create a DRUNet denoiser appropriate for the given ground truth shape.
 
     Automatically detects whether to use:
@@ -235,7 +240,11 @@ def create_drunet_denoiser(ground_truth_shape, device="cpu", dtype=torch.float32
     DRUNet
         Configured DRUNet denoiser model.
     """
-    from .support_3d import patch_drunet_3d, transform_2d_to_3d
+    if torch is None:
+        raise ImportError("Torch is required to create a denoiser.")
+
+    if dtype is None:
+        dtype = torch.float32
 
     # Determine dimensionality
     ndim = len(ground_truth_shape)

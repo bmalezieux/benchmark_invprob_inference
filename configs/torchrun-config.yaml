@@ -1,0 +1,3 @@
+backend: torchrun
+# Default number of processes per node (can be overridden by solver parameters)
+torchrun_nproc_per_node: 1
