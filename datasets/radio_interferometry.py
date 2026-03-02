@@ -12,7 +12,7 @@ from astropy.io import fits
 
 from benchopt import BaseDataset
 from benchopt import config
-from benchmark_utils.radio_utils import get_meerkat_visibilities_path
+from benchmark_utils.radio_utils import get_meerkat_visibilities_path, load_new_header
 
 
 class Dataset(BaseDataset):
@@ -122,7 +122,8 @@ class Dataset(BaseDataset):
 
                 source_fits_path = data_path / fits_name
                 img_np = load_and_resize_image(source_fits_path, self.image_size)
-                fits.PrimaryHDU(img_np).writeto(cached_resized_fits_path, overwrite=True)
+                new_header = load_new_header(source_fits_path, self.image_size)
+                fits.PrimaryHDU(img_np, header=new_header).writeto(cached_resized_fits_path, overwrite=True)
 
             if not img_np.dtype.isnative:
                 img_np = img_np.byteswap().view(img_np.dtype.newbyteorder("="))

@@ -8,7 +8,7 @@ from astropy.io import fits
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from benchmark_utils.karabo_utils import generate_meerkat_visibilities
-from benchmark_utils.radio_utils import load_and_resize_image, load_config
+from benchmark_utils.radio_utils import load_and_resize_image, load_config, load_new_header
 
 def generate_data_for_size(cfg, image_size):
     """Generate data for a specific image size."""
@@ -44,16 +44,25 @@ def generate_data_for_size(cfg, image_size):
             print(f"Could not find {fits_name} in {data_path} or {default_data_dir}")
             return
             
-    try:
-        resized_img = load_and_resize_image(fits_file, image_size)
-    except Exception as e:
-        print(f"Could not load/process example image: {e}")
-        return
-
-    # Materialize resized image as FITS and use it for simulation input.
     fits_stem = Path(fits_name).stem
     resized_fits_path = ms_cache_dir / f"{fits_stem}_{image_size}.fits"
-    fits.PrimaryHDU(data=resized_img, header=fits.getheader(fits_file)).writeto(resized_fits_path, overwrite=True)
+
+    if resized_fits_path.exists():
+        print(f"Using cached resized image: {resized_fits_path}")
+        try:
+            resized_img = fits.getdata(resized_fits_path)
+        except Exception as e:
+            print(f"Could not load cached resized image {resized_fits_path}: {e}")
+            return
+    else:
+        try:
+            resized_img = load_and_resize_image(fits_file, image_size)
+        except Exception as e:
+            print(f"Could not load/process example image: {e}")
+            return
+
+        new_header = load_new_header(fits_file, image_size)
+        fits.PrimaryHDU(data=resized_img, header=new_header).writeto(resized_fits_path, overwrite=True)
 
     print(f"Generating data for image size {image_size} with use_gpus={use_gpus}")
     

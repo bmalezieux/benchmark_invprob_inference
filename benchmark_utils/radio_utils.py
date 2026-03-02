@@ -61,6 +61,21 @@ def load_and_resize_image(image_path, image_size):
 
     return np.ascontiguousarray(resized_img, dtype=np.float32)
 
+def load_new_header(fits_file, image_size):
+    orig_header = fits.getheader(fits_file)
+    orig_naxis1 = int(orig_header.get('NAXIS1', image_size))
+    orig_naxis2 = int(orig_header.get('NAXIS2', image_size))
+    new_header = orig_header.copy()
+    # Scale pixel size: new pixel covers more angle (fewer pixels, same FOV)
+    if 'CDELT1' in new_header:
+        new_header['CDELT1'] = float(orig_header['CDELT1']) * orig_naxis1 / image_size
+    if 'CDELT2' in new_header:
+        new_header['CDELT2'] = float(orig_header['CDELT2']) * orig_naxis2 / image_size
+    # Move reference pixel to the centre of the new image
+    new_header['CRPIX1'] = (image_size + 1) / 2.0
+    new_header['CRPIX2'] = (image_size + 1) / 2.0
+    return new_header
+
 '''def get_meerkat_visibilities_path(
     image: np.ndarray,
     cache_dir: Path,

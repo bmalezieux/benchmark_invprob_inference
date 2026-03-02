@@ -7,8 +7,8 @@ job:
   data_path: "./data/radio_interferometry"
   use_gpus: True
   number_of_time_steps: 512
-  start_frequency_hz: 100e6
-  end_frequency_hz: 120e6
+  start_frequency_hz: 1.300e9
+  end_frequency_hz: 1.320e9
   number_of_channels: 12
   add_noise: False
   noise_rms_percent: 20
