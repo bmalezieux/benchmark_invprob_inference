@@ -70,7 +70,8 @@ def initialize_reconstruction(
         return torch.zeros(signal_shape, device=device)
 
     elif method == "pseudo_inverse":
-        x_init = operator.A_dagger(measurements)
+        #x_init = operator.A_dagger(measurements)
+        x_init = operator.A_adjoint(measurements)
         x_init = normalize(x_init, 0.0, 1.0)
         return x_init
 
@@ -368,14 +369,20 @@ class Solver(BaseSolver):
                     )
                     # Gradient descent step
                     self.reconstruction = self.reconstruction - step_size * grad
+                
+                # Clip reconstruction to valid range after denoising
+                if self.clip_range is not None:
+                    self.reconstruction = torch.clamp(
+                        self.reconstruction, self.clip_range[0], self.clip_range[1]
+                    )
 
                 # ===== DENOISING STEP =====
                 with self.gpu_tracker.track_step("denoise"):
                     # Denoising step
                     if self.denoiser_lambda_relaxation is None:
-                        self.reconstruction = prior.prox(
-                            self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                        )
+                       self.reconstruction = prior.prox(
+                           self.reconstruction, sigma_denoiser=self.denoiser_sigma
+                       )
                     else:
                         denoised_reconstruction = prior.prox(
                             self.reconstruction, sigma_denoiser=self.denoiser_sigma
@@ -388,7 +395,7 @@ class Solver(BaseSolver):
 
                     # Clip reconstruction to valid range after denoising
                     if self.clip_range is not None:
-                        self.reconstruction = normalize(
+                        self.reconstruction = torch.clamp(
                             self.reconstruction, self.clip_range[0], self.clip_range[1]
                         )
 
@@ -464,7 +471,6 @@ class Solver(BaseSolver):
         self.reconstruction = self._initialize_reconstruction(
             physics, measurement, self.device
         )
-        # cb()
         print("Reconstruction initialized.")
 
         # Clip initial reconstruction if requested

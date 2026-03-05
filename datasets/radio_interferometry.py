@@ -61,6 +61,7 @@ class Dataset(BaseDataset):
         simulator_hash=None,
     ):
         """Initialize the dataset."""
+        super().__init__()
         self.image_size = image_size
         self.noise_level = noise_level
         self.seed = seed
@@ -138,9 +139,7 @@ class Dataset(BaseDataset):
                 raise ValueError("fits_name is not set in the config.")
 
             # Cache directory for MS files
-            parts = data_path.parts
-            idx = parts.index("data")
-            ms_cache_dir = Path(*parts[idx:]) / "meerkat_cache"
+            ms_cache_dir = data_path / "meerkat_cache"
             ms_cache_dir.mkdir(parents=True, exist_ok=True)
 
             fits_stem = Path(fits_name).stem

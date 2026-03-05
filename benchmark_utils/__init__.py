@@ -152,9 +152,10 @@ def save_comparison_figure(
     recon_img = tensor_to_numpy(reconstruction)
     psnr = metrics.get("psnr", 0)
     ssim = metrics.get("ssim", 0)
+    lpips = metrics.get("lpips", 0)
     axes[1].imshow(recon_img, cmap="gray" if recon_img.ndim == 2 else None)
     axes[1].set_title(
-        f"Reconstruction\nPSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}",
+        f"Reconstruction\nPSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, LPIPS: {lpips:.4f}",
         fontsize=14,
         fontweight="bold",
     )

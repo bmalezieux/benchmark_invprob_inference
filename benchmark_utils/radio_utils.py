@@ -2,6 +2,7 @@ import hashlib
 import yaml
 import json
 import types
+import math
 import numpy as np
 from pathlib import Path
 from astropy.io import fits
@@ -109,14 +110,26 @@ def load_new_header(fits_file, image_size):
 def get_meerkat_visibilities_path(
     image: np.ndarray,
     cache_dir: Path,
-    fits_name: str
+    fits_name: str,
+    imaging_npixel: int,
+    number_of_time_steps: int = 256,
+    start_frequency_hz: float = 100e6,
+    end_frequency_hz: float = 120e6,
+    number_of_channels: int = 12,
+    random_position: bool = False,
 ):
     """
     Generate path for MeerKAT visibilities.
     """
     # Create a unique hash for the simulation parameters
     params = {
-        'fits_name': fits_name
+        'fits_name': fits_name,
+        'number_of_time_steps': number_of_time_steps,
+        'start_frequency_hz': start_frequency_hz,
+        'end_frequency_hz': end_frequency_hz,
+        'number_of_channels': number_of_channels,
+        'random_position': random_position,
+        'imaging_npixel': imaging_npixel
     }
     params_str = str(sorted(params.items()))
     params_hash = hashlib.md5(params_str.encode()).hexdigest()
@@ -281,3 +294,20 @@ def draw_random_pointing(
         f"Could not find valid pointing within elevation contour after {max_attempts} attempts. "
         f"Try increasing max_attempts or reducing min_elevation_deg."
     )
+
+def get_cellsize_from_fits_wcs(fits_file: Path) -> float:
+    """Return pixel angular size (radians/pixel) from FITS WCS."""
+    header = fits.getheader(fits_file)
+    cdelt1 = header.get("CDELT1")
+    cdelt2 = header.get("CDELT2")
+
+    if cdelt1 is None and cdelt2 is None:
+        raise ValueError("FITS header has no CDELT1/CDELT2")
+
+    if cdelt1 is not None and cdelt2 is not None:
+        # Use both axes when available for robustness to tiny anisotropy.
+        pixel_scale_deg = 0.5 * (abs(float(cdelt1)) + abs(float(cdelt2)))
+    else:
+        pixel_scale_deg = abs(float(cdelt1 if cdelt1 is not None else cdelt2))
+
+    return math.radians(pixel_scale_deg)
