@@ -5,6 +5,17 @@ This script reads CSV files containing per-rank GPU metrics from benchmark outpu
 and creates interactive Plotly visualizations showing detailed performance breakdown
 for each GPU rank.
 
+Data Format
+-----------
+CSV files contain 2D arrays with the structure [num_batches][n_iter]:
+- gradient_time_sec: Gradient step times per batch per iteration
+- denoise_time_sec: Denoising step times per batch per iteration
+- gradient_memory_peak_mb: Peak GPU memory during gradient per batch per iteration
+- denoise_memory_peak_mb: Peak GPU memory during denoising per batch per iteration
+
+Times are averaged by image: sum(times across batches) / num_images
+Memory is maxed across batches: max(memory across batches)
+
 The script generates the following visualizations:
 1. Gradient Time by Rank - Shows average gradient computation time for each rank
 2. Denoiser Time by Rank - Shows average denoiser computation time for each rank
@@ -43,9 +54,51 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
+def parse_array(val):
+    """Parse array column value (string or actual array)."""
+    return eval(val) if isinstance(val, str) else val
+
+def to_2d(arr):
+    """Convert 1D or scalar array to 2D format [[batch][iter]]."""
+    if not isinstance(arr, (list, tuple)):
+        return [[arr]]
+    if len(arr) > 0 and isinstance(arr[0], (list, tuple)):
+        return arr  # Already 2D
+    return [arr]  # Wrap 1D in outer list
+
+def parse_filename(filename):
+    """Extract timestamp, GPU config, rank, and batch size from filename."""
+    timestamp = re.search(r"(\d{8}_\d{6})", filename)
+    timestamp = timestamp.group(1) if timestamp else ""
+    
+    bs_match = re.search(r"_bs(\d+)_", filename)
+    bs = int(bs_match.group(1)) if bs_match else None
+    
+    if "_single_" in filename:
+        return timestamp, "single", 0, 1, bs
+    
+    # Match patterns like "1n2t", "torchrun_2proc", etc.
+    rank_match = re.search(r"_(\d+n\d+t)_rank(\d+)", filename)
+    if rank_match:
+        gpu_config = rank_match.group(1)
+        rank = int(rank_match.group(2))
+        digits = re.findall(r"\d+", gpu_config)
+        num_gpus = int(digits[0]) * int(digits[1]) if len(digits) >= 2 else 1
+        return timestamp, gpu_config, rank, num_gpus, bs
+    
+    # Match torchrun pattern: "torchrun_Nproc_rankN"
+    torchrun_match = re.search(r"_torchrun_(\d+)proc_rank(\d+)", filename)
+    if torchrun_match:
+        num_gpus = int(torchrun_match.group(1))
+        rank = int(torchrun_match.group(2))
+        return timestamp, f"torchrun_{num_gpus}", rank, num_gpus, bs
+    
+    return timestamp, "unknown", 0, 1, bs
+
 def read_csv_files(output_dir):
     """
     Read CSV files containing GPU metrics from the output directory.
+    Each CSV row contains arrays of values for all iterations, which are expanded into separate rows.
     Groups files by configuration based on GPU count.
 
     Parameters
@@ -61,131 +114,86 @@ def read_csv_files(output_dir):
         Name of the result (from output directory)
     """
     output_path = Path(output_dir)
-
-    # Find and read all CSV files
     csv_paths = list(output_path.glob("*gpu_metrics.csv"))
 
     if not csv_paths:
         print("No CSV files found")
         return [], output_path.name
 
-    # Parse filenames to extract timestamp and GPU configuration
     csv_data = []
     for csv_path in csv_paths:
-        filename = csv_path.stem
+        timestamp, gpu_config, rank, num_gpus, bs = parse_filename(csv_path.stem)
 
-        # Extract timestamp
-        timestamp_match = re.search(r"(\d{8}_\d{6})", filename)
-        timestamp = timestamp_match.group(1) if timestamp_match else ""
+        # Read CSV and expand arrays into per-iteration rows
+        raw_df = pd.read_csv(csv_path)
+        expanded_rows = []
+        
+        for _, row in raw_df.iterrows():
+            # Parse and convert all arrays to 2D format [num_batches][n_iter]
+            gradient_time = to_2d(parse_array(row['gradient_time_sec']))
+            denoise_time = to_2d(parse_array(row['denoise_time_sec']))
+            gradient_memory_peak = to_2d(parse_array(row['gradient_memory_peak_mb']))
+            denoise_memory_peak = to_2d(parse_array(row['denoise_memory_peak_mb']))
+            
+            num_batches = len(gradient_time)
+            n_iters = len(gradient_time[0]) if num_batches > 0 else 0
+            num_images = row.get('num_images', 1)
+            
+            # Expand into per-iteration rows with time averaged by image, memory maxed across batches
+            for iter_idx in range(n_iters):
+                grad_time = sum(gradient_time[b][iter_idx] for b in range(num_batches) if iter_idx < len(gradient_time[b]))
+                den_time = sum(denoise_time[b][iter_idx] for b in range(num_batches) if iter_idx < len(denoise_time[b]))
+                grad_mem = [gradient_memory_peak[b][iter_idx] for b in range(num_batches) if iter_idx < len(gradient_memory_peak[b])]
+                den_mem = [denoise_memory_peak[b][iter_idx] for b in range(num_batches) if iter_idx < len(denoise_memory_peak[b])]
+                
+                expanded_rows.append({
+                    'iteration': iter_idx,
+                    'gradient_time_sec': grad_time / num_images if num_images > 0 else None,
+                    'denoise_time_sec': den_time / num_images if num_images > 0 else None,
+                    'gradient_memory_peak_mb': max(grad_mem) if grad_mem else None,
+                    'denoise_memory_peak_mb': max(den_mem) if den_mem else None,
+                })
+        
+        expanded_df = pd.DataFrame(expanded_rows)
+        csv_data.append({
+            "path": csv_path, "filename": csv_path.stem, "timestamp": timestamp,
+            "gpu_config": gpu_config, "rank": rank, "num_gpus": num_gpus,
+            "bs": bs, "df": expanded_df,
+        })
+        print(f"Loaded CSV file: {csv_path.name} - Expanded to {len(expanded_df)} iterations")
 
-        # Determine GPU configuration
-        if "_single_" in filename:
-            gpu_config = "single"
-            rank = 0
-            num_gpus = 1
-        else:
-            # Extract pattern before '_rank' (e.g., "1n2t", "1n4t", "2n2t")
-            rank_match = re.search(r"_(\d+n\d+t)_rank(\d+)", filename)
-            if rank_match:
-                gpu_config = rank_match.group(1)
-                rank = int(rank_match.group(2))
-                # Extract number of GPUs: first digit * third digit (e.g., "1n2t" -> 1*2=2, "1n4t" -> 1*4=4)
-                digits = re.findall(r"\d+", gpu_config)
-                if len(digits) >= 2:
-                    num_gpus = int(digits[0]) * int(digits[1])
-                else:
-                    num_gpus = 1
-            else:
-                gpu_config = "unknown"
-                rank = 0
-                num_gpus = 1
-
-        # Extract BS if present
-        bs_match = re.search(r"_bs(\d+)_", filename)
-        bs = int(bs_match.group(1)) if bs_match else None
-
-        csv_data.append(
-            {
-                "path": csv_path,
-                "filename": filename,
-                "timestamp": timestamp,
-                "gpu_config": gpu_config,
-                "rank": rank,
-                "num_gpus": num_gpus,
-                "bs": bs,
-                "df": pd.read_csv(csv_path),
-            }
-        )
-        print(f"Loaded CSV file: {csv_path.name}")
-
-    # Group CSV files: each group has all ranks for a configuration
-    # single: 1 file, XnYt: X*Y files (all ranks)
-    csv_groups = []
-
-    # Sort by GPU config then rank
-    csv_data.sort(key=lambda x: (x["gpu_config"], x["rank"]))
-
-    # Group by (gpu_config, bs)
-
-    csv_groups = []
-
-    # Helper for grouping key
-    def get_group_key(item):
-        # Treat None BS as -1 for sorting/grouping consistency if needed, but tuple works fine
-        return (item["gpu_config"], item["bs"] if item["bs"] is not None else -1)
-
-    # Sort data for grouping
+    # Group CSV files by (gpu_config, bs)
+    get_group_key = lambda x: (x["gpu_config"], x["bs"] if x["bs"] is not None else -1)
     csv_data.sort(key=get_group_key)
-
+    
+    csv_groups = []
     for (gpu_config, _), group in itertools.groupby(csv_data, key=get_group_key):
         files = list(group)
-        bs = files[0]["bs"]  # restore original bs value (None or int)
-
-        # Determine expected number of GPUs
-        if gpu_config == "single":
-            expected = 1
-        else:
-            expected = files[0]["num_gpus"]
-
-        # Get ranks present
-        # If we have multiple runs for same config/bs, we take the most recent file for each rank
+        bs = files[0]["bs"]
+        expected = 1 if gpu_config == "single" else files[0]["num_gpus"]
+        
+        # Take most recent file for each rank
         rank_files = {}
         for f in files:
             r = f["rank"]
             if r not in rank_files or f["timestamp"] > rank_files[r]["timestamp"]:
                 rank_files[r] = f
-
+        
         # Check if we have all ranks
-        if len(rank_files) == expected and sorted(rank_files.keys()) == list(
-            range(expected)
-        ):
+        if len(rank_files) == expected and sorted(rank_files.keys()) == list(range(expected)):
             final_files = [rank_files[r] for r in sorted(rank_files.keys())]
-
-            # Use max timestamp of the group as the group timestamp
-            group_ts = max(f["timestamp"] for f in final_files)
-
-            csv_groups.append(
-                {
-                    "timestamp": group_ts,
-                    "gpu_config": gpu_config,
-                    "bs": bs,
-                    "files": final_files,
-                }
-            )
+            csv_groups.append({
+                "timestamp": max(f["timestamp"] for f in final_files),
+                "gpu_config": gpu_config, "bs": bs, "files": final_files,
+            })
         else:
-            print(
-                f"Warning: Incomplete ranks for config={gpu_config}, bs={bs}. Found: {sorted(rank_files.keys())}, Expected: {expected}"
-            )
-
-    # Sort groups by:
-    # 1. Number of GPUs (asc)
-    # 2. Batch size (asc) - None considered as smallest (or use arbitrary order)
-    def sort_key(g):
-        num_gpus = 1 if g["gpu_config"] == "single" else g["files"][0]["num_gpus"]
-        bs_val = g["bs"] if g["bs"] is not None else 0
-        return (num_gpus, bs_val)
-
-    csv_groups.sort(key=sort_key)
+            print(f"Warning: Incomplete ranks for config={gpu_config}, bs={bs}. Found: {sorted(rank_files.keys())}, Expected: {expected}")
+    
+    # Sort groups by number of GPUs and batch size
+    csv_groups.sort(key=lambda g: (
+        1 if g["gpu_config"] == "single" else g["files"][0]["num_gpus"],
+        g["bs"] if g["bs"] is not None else 0
+    ))
 
     print(f"\nGrouped into {len(csv_groups)} configuration(s)")
     for i, group in enumerate(csv_groups):
@@ -198,40 +206,22 @@ def read_csv_files(output_dir):
 
 
 def get_config_label(gpu_config):
-    """
-    Get descriptive label for GPU configuration.
-
-    Parameters
-    ----------
-    gpu_config : str
-        GPU configuration string (e.g., 'single', '1n2t', '1n4t')
-
-    Returns
-    -------
-    str
-        Descriptive label for the configuration
-    """
+    """Get descriptive label for GPU configuration."""
     if gpu_config == "single":
         return "1 GPU"
-    else:
-        # Extract number of GPUs from pattern like "1n2t" -> 1*2=2
-        digits = re.findall(r"\d+", gpu_config)
-        if len(digits) >= 2:
-            num_gpus = int(digits[0]) * int(digits[1])
-            return f"{num_gpus} GPUs - Distributed"
-        return gpu_config
-
+    if gpu_config.startswith("torchrun_"):
+        num_gpus = int(gpu_config.split("_")[1])
+        return f"{num_gpus} GPUs - Distributed"
+    # Extract from pattern like "1n2t" -> 1*2=2
+    digits = re.findall(r"\d+", gpu_config)
+    if len(digits) >= 2:
+        return f"{int(digits[0]) * int(digits[1])} GPUs - Distributed"
+    return gpu_config
 
 def get_group_label(group):
-    """
-    Get descriptive label for a group, including BS if present.
-    """
-    gpu_config = group["gpu_config"]
-    base_label = get_config_label(gpu_config)
-
-    if group["bs"] is not None:
-        return f"{base_label} (BS={group['bs']})"
-    return base_label
+    """Get descriptive label for a group, including BS if present."""
+    label = get_config_label(group["gpu_config"])
+    return f"{label} (BS={group['bs']})" if group["bs"] is not None else label
 
 
 def plot_metric_by_rank(csv_groups, output_dir, metric_config):

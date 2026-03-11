@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import time
 
 import torch
 from benchopt import BaseSolver
@@ -8,9 +9,11 @@ from deepinv.optim.data_fidelity import L2
 from deepinv.optim.prior import PnP
 from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
+from deepinv.loss.metric import PSNR
 
 from benchmark_utils import create_drunet_denoiser
 from benchmark_utils.gpu_metrics import GPUMetricsTracker, save_result_per_rank
+from benchmark_utils.support_dataloader import _move_measurement_to_device
 
 
 def compute_step_size_from_operator(
@@ -100,6 +103,7 @@ class Solver(BaseSolver):
         "step_size": [None],
         "step_size_scale": [0.99],
         "denoiser_sigma": [0.05],
+        "n_iter": [10],
         "distribute_physics": [False],
         "distribute_denoiser": [False],
         "patch_size": [128],
@@ -318,7 +322,7 @@ class Solver(BaseSolver):
             )
 
     def _run_pnp_iterations(
-        self, prior, data_fidelity, physics, measurements, step_size, cb
+        self, prior, data_fidelity, physics, step_size, cb,ctx
     ):
         """Run PnP iterations over all batches.
 
@@ -326,12 +330,11 @@ class Solver(BaseSolver):
             prior: PnP prior
             data_fidelity: L2 data fidelity
             physics: Physics operators
-            measurements: List of measurements (one per batch)
             step_size: Step size for gradient descent
             cb: Callback function
 
         Returns:
-            None (updates self.reconstructions in-place)
+            Final average PSNR across all batches
         """
         with torch.no_grad():
 
@@ -345,58 +348,113 @@ class Solver(BaseSolver):
 
                 if not keep_going:
                     break
+                
+                # Init metrics (computed once per image/batch)
+                init_psnr_per_image = []  # [num_images]
+                init_time_per_batch = []  # [num_batches] 
+                
+                # Iteration metrics - structure as [num_images][n_iter]
+                psnr_per_image_iter = []  # List where each element is a list of PSNR values for one image
+                time_per_batch_iter = []  # [num_batches][n_iter]
+                
+                # GPU metrics per [batch][n_iter]
+                all_batch_iter_metrics = {}
+                
+                # Track total number of images processed to build per-image PSNR lists
+                num_images_processed = 0
+                
+                # Process all batches
+                for batch_idx, (ground_truth, measurement) in enumerate(self.dataloader):
+                    batch_size = ground_truth.shape[0]
+                    
+                    # === INITIALIZATION PHASE ===
+                    init_start = time.perf_counter()
+                    
+                    # Move data to device
+                    ground_truth = ground_truth.to(self.device)
+                    measurement = _move_measurement_to_device(measurement, self.device)
 
-                # Process one PnP step for all batches
-                for batch_idx in range(len(measurements)):
-                    # Use measurement (already on correct device)
-                    measurement = measurements[batch_idx]
+                    # Initialize reconstruction
+                    reconstruction = self._initialize_reconstruction(self.physics, measurement, ground_truth, self.device)
+                    if self.clip_range is not None:
+                        reconstruction = torch.clamp(reconstruction, self.clip_range[0], self.clip_range[1])
 
-                    # Get reconstruction for this batch (move from CPU to GPU)
-                    self.reconstruction = self.reconstructions[batch_idx].to(
-                        self.device
-                    )
-                    self.gpu_tracker.reset_iteration_tracking()
+                    # Compute and store initial PSNR for each image in batch
+                    initial_psnr_values = self.psnr_metric(reconstruction, ground_truth)  # [batch_size]
+                    init_psnr_per_image.extend(initial_psnr_values.cpu().tolist())
+                    
+                    # Record init time for this batch
+                    init_time_per_batch.append(time.perf_counter() - init_start)
+                    
+                    # Initialize per-image PSNR lists for images in this batch
+                    for _ in range(batch_size):
+                        psnr_per_image_iter.append([])
+                    
+                    batch_time_list = []  # Will collect iteration times for this batch
+                    
+                    # === ITERATION PHASE ===
+                    for iter_idx in range(self.n_iter):
+                        iter_start = time.perf_counter()
+                        
+                        # Gradient step
+                        with self.gpu_tracker.track_step("gradient"):
+                            grad = data_fidelity.grad(reconstruction, measurement, physics)
+                            reconstruction = reconstruction - step_size * grad
 
-                    # Gradient step
-                    with self.gpu_tracker.track_step("gradient"):
-                        # Data fidelity gradient step
-                        grad = data_fidelity.grad(
-                            self.reconstruction, measurement, physics
-                        )
-                        # Gradient descent step
-                        self.reconstruction = self.reconstruction - step_size * grad
-
-                    # Denoising step
-                    with self.gpu_tracker.track_step("denoise"):
                         # Denoising step
-                        if self.denoiser_lambda_relaxation is None:
-                            self.reconstruction = prior.prox(
-                                self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                            )
-                        else:
-                            denoised_reconstruction = prior.prox(
-                                self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                            )
-                            lamda = self.denoiser_lambda_relaxation
-                            alpha = (step_size * lamda) / (1 + step_size * lamda)
-                            self.reconstruction = (
-                                (1 - alpha) * self.reconstruction
-                                + alpha * denoised_reconstruction
-                            )
+                        with self.gpu_tracker.track_step("denoise"):
+                            if self.denoiser_lambda_relaxation is None:
+                                reconstruction = prior.prox(reconstruction, sigma_denoiser=self.denoiser_sigma)
+                            else:
+                                denoised = prior.prox(reconstruction, sigma_denoiser=self.denoiser_sigma)
+                                lamda = self.denoiser_lambda_relaxation
+                                alpha = (step_size * lamda) / (1 + step_size * lamda)
+                                reconstruction = (1 - alpha) * reconstruction + alpha * denoised
 
-                        # Clip reconstruction to valid range after denoising
-                        if self.clip_range is not None:
-                            self.reconstruction = torch.clamp(
-                                self.reconstruction,
-                                self.clip_range[0],
-                                self.clip_range[1],
-                            )
+                            if self.clip_range is not None:
+                                reconstruction = torch.clamp(reconstruction, self.clip_range[0], self.clip_range[1])
 
-                    # Store updated reconstruction (move to CPU to save GPU memory)
-                    self.reconstructions[batch_idx] = self.reconstruction.cpu()
-                    iteration_result = self.gpu_tracker.capture_iteration_result()
-                    self.all_results.append(iteration_result)
-
+                        # Compute PSNR for each image and store in per-image lists
+                        iter_psnr_values = self.psnr_metric(reconstruction, ground_truth)  # [batch_size]
+                        psnr_list = iter_psnr_values.cpu().tolist()
+                        for img_idx_in_batch, psnr_val in enumerate(psnr_list):
+                            global_img_idx = num_images_processed + img_idx_in_batch
+                            psnr_per_image_iter[global_img_idx].append(psnr_val)
+                                                
+                        # Time for this iteration
+                        iter_time = time.perf_counter() - iter_start
+                        batch_time_list.append(iter_time)
+                        
+                        # Capture GPU metrics
+                        iter_metrics = self.gpu_tracker.capture_iteration_result()
+                        iter_metrics['iteration_time_sec'] = iter_time
+                        
+                        # Initialize dict structure on first use and store values
+                        for key, val in iter_metrics.items():
+                            if key not in all_batch_iter_metrics:
+                                all_batch_iter_metrics[key] = []
+                            if len(all_batch_iter_metrics[key]) == batch_idx:
+                                all_batch_iter_metrics[key].append([])
+                            all_batch_iter_metrics[key][batch_idx].append(val)
+                        
+                        print(f"Batch {batch_idx}, Iter {iter_idx + 1}/{self.n_iter}: PSNR = {iter_psnr_values.mean().item():.2f} dB, Time = {iter_time:.3f}s")
+                    
+                    # Store iteration times for this batch
+                    time_per_batch_iter.append(batch_time_list)
+                    
+                    # Update count of images processed
+                    num_images_processed += batch_size
+                
+                # Store results
+                self.psnr_history.append((init_psnr_per_image, psnr_per_image_iter))
+                self.iter_times.append((init_time_per_batch, time_per_batch_iter))  # (init_times[num_batches], iter_times[num_batches][n_iter])
+                self.all_results.append(all_batch_iter_metrics)
+            
+            # Return final PSNR (average of last iteration across all images)
+            _, psnr_iters = self.psnr_history[-1]
+            final_psnr = sum(img[-1] for img in psnr_iters) / len(psnr_iters)
+            return final_psnr
+            
     def _run_with_context(self, cb, ctx=None):
         """Run PnP with optional distributed context.
 
@@ -415,6 +473,12 @@ class Solver(BaseSolver):
 
         # Initialize GPU metrics tracker
         self.gpu_tracker = GPUMetricsTracker(device=self.device)
+
+        # Track PSNR history and per-iteration metrics
+        self.psnr_history = []
+        self.iter_times = []
+        self.psnr_metric = PSNR(reduction="none")  # Get per-image PSNR values
+        
 
         # Initialize reconstructions list
         self.reconstructions = []
@@ -441,37 +505,7 @@ class Solver(BaseSolver):
             if hasattr(physics, "to"):
                 physics = physics.to(self.device)
 
-        # First pass: Load data once and cache to avoid repeated I/O
-        print("Loading and caching data from dataloader...")
-        measurements = []  # List to hold measurements for all batches
-
-        for ground_truth, measurement in self.dataloader:
-            if hasattr(measurement, "to"):
-                measurement = measurement.to(self.device)
-            elif isinstance(measurement, TensorList):
-                measurement = TensorList([m.to(self.device) for m in measurement])
-            elif isinstance(measurement, list):
-                measurement = [m.to(self.device) for m in measurement]
-            else:
-                measurement = measurement
-
-            measurements.append(measurement)
-
-            # Initialize reconstruction for this batch
-            reconstruction = self._initialize_reconstruction(
-                physics, measurement, ground_truth, self.device
-            )
-            if self.clip_range is not None:
-                reconstruction = torch.clamp(
-                    reconstruction, self.clip_range[0], self.clip_range[1]
-                )
-
-            # Move to CPU initially to save GPU memory
-            self.reconstructions.append(reconstruction.cpu())
-
-        print(f"\nInitialized {len(self.reconstructions)} batches")
-
-        # Setup components once
+         # Setup components once
         prior, data_fidelity = self._setup_components(self.device, ctx)
         print("Components set up.")
 
@@ -479,55 +513,57 @@ class Solver(BaseSolver):
         step_size = self._compute_step_size(physics, self.device)
         print("Step size computed:", step_size)
 
-        # Run PnP iterations
-        self._run_pnp_iterations(
-            prior, data_fidelity, physics, measurements, step_size, cb
+        # Run PnP iterations (now loads measurements from dataloader each run)
+        final_psnr = self._run_pnp_iterations(
+            prior, data_fidelity, physics, step_size, cb, ctx
         )
+        print(f"Final average PSNR: {final_psnr:.2f} dB")
+
+        # Save results to CSV file 
+        if self.all_results:               
+                save_result_per_rank(self.all_results, self.name, self.max_batch_size)
 
         # Synchronize at the end of the run to ensure benchopt captures the full execution time
         # This must be done BEFORE the context manager exits
-        if self.device.type == "cuda":
-            torch.cuda.synchronize(self.device)
+
         if ctx is not None:
             ctx.barrier()
 
-        # Save results to file (both distributed and single-GPU modes)
-        save_result_per_rank(self.all_results, self.name, self.max_batch_size)
 
     def get_result(self):
         """Return the reconstruction result.
 
         Returns:
-            dict: Dictionary with 'reconstructions' key (list of tensors), GPU memory snapshot,
-            and per-step metrics (gradient and denoise timing/memory)
+            dict: Dictionary with scalar PSNR and per-iteration data:
+            - avg_psnr: Final PSNR (scalar) - for objective
+            - init_psnr_per_image: [num_images] - initial PSNR values
+            - psnr_per_image_iter: [num_images][n_iter] - iteration PSNR values
+            - init_time_per_batch: [num_batches] - init time per batch (1D array)
+            - iter_times_per_batch: [num_batches][n_iter] - iteration times (2D array)
+            - gpu metrics: [num_batches][n_iter] - GPU metrics for iterations (2D arrays)
         """
-        # Return all reconstructions (they are updated in-place during iterations)
-        result = dict(reconstructions=self.reconstructions, name=self.name)
-
-        # Add GPU memory snapshot
-        if self.gpu_tracker is not None:
-            gpu_mem = self.gpu_tracker.get_gpu_memory_snapshot()
-            result.update(
-                {
-                    "gpu_memory_allocated_mb": gpu_mem["allocated_mb"],
-                    "gpu_memory_reserved_mb": gpu_mem["reserved_mb"],
-                    "gpu_memory_max_allocated_mb": gpu_mem["max_allocated_mb"],
-                    "gpu_available_memory_mb": gpu_mem["available_mb"],
-                }
-            )
-
-            # Add per-step metrics
-            all_step_metrics = self.gpu_tracker.get_all_step_metrics()
-            for step_name, metrics in all_step_metrics.items():
-                result[f"{step_name}_time_sec"] = metrics["time_sec"]
-                result[f"{step_name}_memory_allocated_mb"] = metrics[
-                    "memory_allocated_mb"
-                ]
-                result[f"{step_name}_memory_reserved_mb"] = metrics[
-                    "memory_reserved_mb"
-                ]
-                result[f"{step_name}_memory_delta_mb"] = metrics["memory_delta_mb"]
-                result[f"{step_name}_memory_peak_mb"] = metrics["memory_peak_mb"]
+        if not self.psnr_history:
+            return dict(avg_psnr=0.0, name=self.name)
+        
+        # Unpack results
+        init_psnr, psnr_iters = self.psnr_history[-1]
+        init_time, time_iters = self.iter_times[-1]
+        
+        # Final PSNR is average of last iteration across all images
+        final_psnr = sum(img[-1] for img in psnr_iters) / len(psnr_iters)
+        
+        result = dict(
+            avg_psnr=final_psnr,
+            init_psnr_per_image=init_psnr,
+            psnr_per_image_iter=psnr_iters,
+            init_time_per_batch=init_time,
+            iter_times_per_batch=time_iters,
+            name=self.name
+        )
+        
+        # Add GPU metrics [batch][n_iter+1]
+        if self.all_results:
+            result.update(self.all_results[-1])
 
         return result
 

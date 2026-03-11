@@ -35,6 +35,7 @@ Visualizations are saved in: results_dir/result_name/
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -64,16 +65,14 @@ def create_config_label(row):
 
 
 def read_parquet_data(output_dir):
-    """Read parquet file from the output directory."""
+    """Read parquet file and expand 2D arrays into per-iteration rows."""
     output_path = Path(output_dir)
     parquet_files = list(output_path.glob("*.parquet"))
-
     if not parquet_files:
         raise FileNotFoundError(f"No parquet file found in {output_dir}")
 
     parquet_df = pd.read_parquet(parquet_files[0])
-
-    # Extract ngpu and batch for sorting
+    
     def get_ngpu(row):
         gres = row.get("p_solver_slurm_gres", "gpu:1")
         return int(gres.split(":")[1]) if isinstance(gres, str) and ":" in gres else 1
@@ -81,18 +80,95 @@ def read_parquet_data(output_dir):
     parquet_df["ngpu"] = parquet_df.apply(get_ngpu, axis=1)
     parquet_df["batch"] = parquet_df["p_solver_max_batch_size"].fillna(0)
     parquet_df["config_label"] = parquet_df.apply(create_config_label, axis=1)
-    parquet_df.sort_values(by=["ngpu", "batch"], inplace=True)
+    
+    def to_list(arr):
+        """Convert numpy array to list recursively."""
+        if isinstance(arr, np.ndarray):
+            return [to_list(x) for x in arr] if arr.ndim > 1 else arr.tolist()
+        return arr
+    
+    def avg_time_per_image(data, num_images, iter_idx):
+        """Average time per image by summing across batches and dividing by number of images."""
+        if not data or not isinstance(data, list) or num_images == 0:
+            return None
+        values = [data[b][iter_idx] for b in range(len(data)) if len(data[b]) > iter_idx]
+        return np.sum(values) / num_images if values else None
+    
+    def max_across_batches(data, batch_idx, iter_idx):
+        """Max metric across batches for given iteration."""
+        if not data or not isinstance(data, list):
+            return None
+        values = [data[b][iter_idx] for b in range(len(data)) if len(data[b]) > iter_idx]
+        return max(values) if values else None
+    
+    expanded_rows = []
+    
+    for idx, row in parquet_df.iterrows():
+        psnr_iter = to_list(row.get('objective_psnr_per_image_iter', None))
+        init_psnr = to_list(row.get('objective_init_psnr_per_image', None))
+        iter_times = to_list(row.get('objective_iter_times_per_batch', None))
+        init_times = to_list(row.get('objective_init_time_per_batch', None))
+        grad_times = to_list(row.get('objective_gradient_time_sec', None))
+        denoise_times = to_list(row.get('objective_denoise_time_sec', None))
+        grad_mem = to_list(row.get('objective_gradient_memory_peak_mb', None))
+        denoise_mem = to_list(row.get('objective_denoise_memory_peak_mb', None))
+        
+        if not psnr_iter or not isinstance(psnr_iter, list) or len(psnr_iter) == 0:
+            continue
+        
+        num_images = len(psnr_iter)
+        n_iters = len(psnr_iter[0]) if num_images > 0 else 0
+        
+        if n_iters == 0:
+            continue
+        
+        # Iteration 0 (init)
+        if init_psnr and isinstance(init_psnr, list) and len(init_psnr) > 0:
+            new_row = row.copy()
+            new_row['iteration'] = 0
+            new_row['objective_psnr'] = np.mean(init_psnr)
+            new_row['objective_psnr_std'] = np.std(init_psnr)
+            new_row['objective_iter_time'] = np.sum(init_times) / num_images if init_times else None
+            new_row['objective_gradient_time'] = None
+            new_row['objective_denoise_time'] = None
+            new_row['objective_gradient_memory_peak'] = None
+            new_row['objective_denoise_memory_peak'] = None
+            expanded_rows.append(new_row)
+        
+        # Iterations 1..n
+        for iter_idx in range(n_iters):
+            new_row = row.copy()
+            new_row['iteration'] = iter_idx + 1
+            
+            psnr_vals = [psnr_iter[i][iter_idx] for i in range(num_images) if len(psnr_iter[i]) > iter_idx]
+            new_row['objective_psnr'] = np.mean(psnr_vals) if psnr_vals else None
+            new_row['objective_psnr_std'] = np.std(psnr_vals) if psnr_vals else 0.0
+            new_row['objective_iter_time'] = avg_time_per_image(iter_times, num_images, iter_idx)
+            new_row['objective_gradient_time'] = avg_time_per_image(grad_times, num_images, iter_idx)
+            new_row['objective_denoise_time'] = avg_time_per_image(denoise_times, num_images, iter_idx)
+            new_row['objective_gradient_memory_peak'] = max_across_batches(grad_mem, 0, iter_idx)
+            new_row['objective_denoise_memory_peak'] = max_across_batches(denoise_mem, 0, iter_idx)
+            expanded_rows.append(new_row)
+    
+    if not expanded_rows:
+        print("Warning: No per-iteration data found, returning original dataframe")
+        return parquet_df, output_path.name
+    
+    expanded_df = pd.DataFrame(expanded_rows)
+    expanded_df.sort_values(by=["ngpu", "batch", "iteration"], inplace=True)
 
     result_name = output_path.name
 
     print(f"Loaded parquet file: {parquet_files[0].name}")
-    print(f"Shape: {parquet_df.shape}")
+    print(f"Original shape: {parquet_df.shape}, Expanded shape: {expanded_df.shape}")
     print("\nConfigurations found:")
-    for label in parquet_df["config_label"].unique():
-        count = (parquet_df["config_label"] == label).sum()
-        print(f"  - {label}: {count} iterations")
+    for label in expanded_df["config_label"].unique():
+        config_data = expanded_df[expanded_df["config_label"] == label]
+        n_iters = config_data["iteration"].max()
+        n_runs = len(config_data) // n_iters if n_iters > 0 else 0
+        print(f"  - {label}: {n_runs} run(s) x {n_iters} iterations")
 
-    return parquet_df, result_name
+    return expanded_df, result_name
 
 
 def create_plot_layout(
@@ -122,9 +198,9 @@ def create_plot_layout(
 
 
 def plot_psnr_vs_metric(
-    parquet_df, output_dir, metric="time", filename="psnr_vs_time.html"
+    parquet_df, output_dir, metric="time", filename="psnr_vs_time.html", show_std=False
 ):
-    """Plot PSNR vs time or iteration."""
+    """Plot PSNR vs time or iteration with optional std deviation."""
     fig = go.Figure()
     groups = parquet_df.groupby("config_label")
     sorted_labels = (
@@ -133,32 +209,49 @@ def plot_psnr_vs_metric(
         .sort_values(by=["ngpu", "batch"])["config_label"]
     )
 
-    metric_col = "time" if metric == "time" else "stop_val"
+    metric_col = "time" if metric == "time" else "iteration"
     metric_label = "Time" if metric == "time" else "Iteration"
     metric_format = ":.3f" if metric == "time" else ""
 
     for label in sorted_labels:
         group = groups.get_group(label).sort_values(metric_col)
-        fig.add_trace(
-            go.Scatter(
-                x=group[metric_col],
-                y=group["objective_psnr"],
-                mode="lines+markers",
-                name=label,
-                line=dict(width=4),
-                marker=dict(size=10),
-                hovertemplate=f"<b>Config:</b> {label}<br><b>{metric_label}:</b> %{{x{metric_format}}}<br><b>PSNR:</b> %{{y:.2f}} dB<br><extra></extra>",
+        
+        # Compute cumulative time if metric is time
+        if metric == "time":
+            group = group.copy()
+            group['time'] = group['objective_iter_time'].cumsum()
+        
+        if show_std and 'objective_psnr_std' in group.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=group[metric_col],
+                    y=group["objective_psnr"],
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(width=4),
+                    marker=dict(size=10),
+                    error_y=dict(type='data', array=group['objective_psnr_std'], visible=True),
+                    hovertemplate=f"<b>Config:</b> {label}<br><b>{metric_label}:</b> %{{x{metric_format}}}<br><b>PSNR:</b> %{{y:.2f}} ± %{{error_y.array:.2f}} dB<br><extra></extra>",
+                )
             )
-        )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=group[metric_col],
+                    y=group["objective_psnr"],
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(width=4),
+                    marker=dict(size=10),
+                    hovertemplate=f"<b>Config:</b> {label}<br><b>{metric_label}:</b> %{{x{metric_format}}}<br><b>PSNR:</b> %{{y:.2f}} dB<br><extra></extra>",
+                )
+            )
 
     title = f"PSNR vs {metric_label}"
     xaxis = f"{metric_label}" + (" (seconds)" if metric == "time" else "")
-    # Show legend only for PSNR vs Time
     show_legend = metric == "time"
     fig.update_layout(
-        **create_plot_layout(
-            title, xaxis, "PSNR (dB)", show_legend=show_legend, legend_y=-0.15
-        )
+        **create_plot_layout(title, xaxis, "PSNR (dB)", show_legend=show_legend, legend_y=-0.15)
     )
 
     output_path = Path(output_dir) / filename
@@ -169,25 +262,15 @@ def plot_psnr_vs_metric(
 
 def plot_time_breakdown_stacked(parquet_df, output_dir):
     """Plot stacked bar chart showing average time for gradient and denoiser."""
-    agg_data = (
-        parquet_df.groupby("config_label")
-        .agg(
-            {
-                "objective_gradient_time_sec": "mean",
-                "objective_denoise_time_sec": "mean",
-                "ngpu": "first",
-                "batch": "first",
-            }
-        )
-        .reset_index()
-    )
+    agg_data = parquet_df[parquet_df['iteration'] > 0].groupby("config_label").agg({
+        "objective_gradient_time": "mean",
+        "objective_denoise_time": "mean",
+        "ngpu": "first",
+        "batch": "first",
+    }).reset_index()
 
-    agg_data["total_time"] = (
-        agg_data["objective_gradient_time_sec"] + agg_data["objective_denoise_time_sec"]
-    )
-    agg_data["denoiser_pct"] = (
-        agg_data["objective_denoise_time_sec"] / agg_data["total_time"]
-    ) * 100
+    agg_data["total_time"] = agg_data["objective_gradient_time"] + agg_data["objective_denoise_time"]
+    agg_data["denoiser_pct"] = (agg_data["objective_denoise_time"] / agg_data["total_time"]) * 100
     agg_data.sort_values(by=["ngpu", "batch"], inplace=True)
 
     fig = go.Figure()
@@ -195,7 +278,7 @@ def plot_time_breakdown_stacked(parquet_df, output_dir):
         go.Bar(
             name="Gradient",
             x=agg_data["config_label"],
-            y=agg_data["objective_gradient_time_sec"],
+            y=agg_data["objective_gradient_time"],
             marker_color="blue",
             width=0.5,
             hovertemplate="<b>Gradient Time:</b> %{y:.3f}s<extra></extra>",
@@ -206,7 +289,7 @@ def plot_time_breakdown_stacked(parquet_df, output_dir):
         go.Bar(
             name="Denoiser",
             x=agg_data["config_label"],
-            y=agg_data["objective_denoise_time_sec"],
+            y=agg_data["objective_denoise_time"],
             marker_color="orange",
             text=agg_data["denoiser_pct"],
             texttemplate="%{text:.1f}%",
@@ -263,26 +346,20 @@ def plot_time_breakdown_stacked(parquet_df, output_dir):
 
 def plot_gpu_memory_from_parquet(parquet_df, output_dir):
     """Plot GPU max memory allocated with gradient/denoiser breakdown."""
-    agg_data = (
-        parquet_df.groupby("config_label")
-        .agg(
-            {
-                "objective_gradient_memory_peak_mb": "mean",
-                "objective_denoise_memory_peak_mb": "mean",
-                "ngpu": "first",
-                "batch": "first",
-            }
-        )
-        .reset_index()
-    )
+    agg_data = parquet_df[parquet_df['iteration'] > 0].groupby("config_label").agg({
+        "objective_gradient_memory_peak": "mean",
+        "objective_denoise_memory_peak": "mean",
+        "ngpu": "first",
+        "batch": "first",
+    }).reset_index()
 
     agg_data.sort_values(by=["ngpu", "batch"], inplace=True)
 
     fig = go.Figure()
 
     for name, col, color in [
-        ("Gradient", "objective_gradient_memory_peak_mb", "blue"),
-        ("Denoiser", "objective_denoise_memory_peak_mb", "orange"),
+        ("Gradient", "objective_gradient_memory_peak", "blue"),
+        ("Denoiser", "objective_denoise_memory_peak", "orange"),
     ]:
         fig.add_trace(
             go.Bar(

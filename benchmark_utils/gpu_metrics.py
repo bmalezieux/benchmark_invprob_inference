@@ -41,6 +41,9 @@ class GPUMetricsTracker:
 
         # Step metrics: {step_name: {'time_sec': float, 'memory_delta_mb': float, ...}}
         self.step_metrics = {}
+        
+        # Per-iteration metrics storage for tracking multiple iterations in a run
+        self.iteration_results_list = []
 
         # Initialize peak memory with current allocation
         if self.has_cuda:
@@ -119,6 +122,9 @@ class GPUMetricsTracker:
         """
         # Reset step metrics
         self.step_metrics = {}
+        
+        # Clear per-iteration results list for new run
+        self.iteration_results_list = []
 
         # Reset peak memory tracking for new iteration
         if self.has_cuda:

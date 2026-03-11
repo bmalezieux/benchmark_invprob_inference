@@ -1,18 +1,17 @@
 import torch
 from deepinv.utils.tensorlist import TensorList
 
-
 def collate_deepinv_batch(batch):
     """Custom collate function to handle TensorList objects from deepinv.
-
+    
     This function properly handles batching of ground truths and measurements,
     including special treatment for TensorList objects from stacked physics operators.
-
+    
     Parameters
     ----------
     batch : list of tuples
         List of (ground_truth, measurement) pairs from dataset.
-
+        
     Returns
     -------
     tuple
@@ -26,9 +25,7 @@ def collate_deepinv_batch(batch):
         if ground_truth.ndim == 3:
             ground_truth = ground_truth.unsqueeze(0)
         if isinstance(measurement, TensorList):
-            measurement = TensorList(
-                [m.unsqueeze(0) if m.ndim == 3 else m for m in measurement]
-            )
+            measurement = TensorList([m.unsqueeze(0) if m.ndim == 3 else m for m in measurement])
         elif isinstance(measurement, (list, tuple)):
             measurement = [m.unsqueeze(0) if m.ndim == 3 else m for m in measurement]
         elif measurement.ndim == 3:
@@ -41,10 +38,10 @@ def collate_deepinv_batch(batch):
         for gt, meas in batch:
             ground_truths.append(gt)
             measurements.append(meas)
-
+        
         # Stack ground truths
         ground_truth_batch = torch.stack(ground_truths, dim=0)
-
+        
         # Handle measurements - if TensorList, stack each operator's measurements
         if isinstance(measurements[0], TensorList):
             # Stack measurements for each operator separately
@@ -65,15 +62,15 @@ def collate_deepinv_batch(batch):
         else:
             # Single tensor measurements
             measurement_batch = torch.stack(measurements, dim=0)
-
+        
         return ground_truth_batch, measurement_batch
 
 
 class ClampedHDF5Dataset:
     """Wrapper for HDF5Dataset that clamps measurements to [min_val, max_val] range.
-
+   
     Clamping is performed once during initialization and cached for efficiency.
-
+   
     Parameters
     ----------
     hdf5_dataset : HDF5Dataset
@@ -81,33 +78,51 @@ class ClampedHDF5Dataset:
     min_val : float, optional
         Minimum value for clamping. Default: 0.0
     max_val : float, optional
-        Maximum value for clamping. Default: 1.0
+        Maximum value for clamping. Default: 1.0 
     """
-
+    
     def __init__(self, hdf5_dataset, min_val=0.0, max_val=1.0):
         self.min_val = min_val
         self.max_val = max_val
-
+        
         # Load and clamp all data once at initialization
         print(f"Clamping {len(hdf5_dataset)} measurements to [{min_val}, {max_val}]...")
         self.data = []
         for i in range(len(hdf5_dataset)):
             ground_truth, measurement = hdf5_dataset[i]
-
+            
             # Clamp measurements to valid pixel range
             if isinstance(measurement, TensorList):
-                measurement = TensorList(
-                    [torch.clamp(m, min_val, max_val) for m in measurement]
-                )
+                measurement = TensorList([torch.clamp(m, min_val, max_val) for m in measurement])
             elif isinstance(measurement, (list, tuple)):
                 measurement = [torch.clamp(m, min_val, max_val) for m in measurement]
             else:
                 measurement = torch.clamp(measurement, min_val, max_val)
-
+            
             self.data.append((ground_truth, measurement))
-
+    
     def __len__(self):
         return len(self.data)
-
+    
     def __getitem__(self, idx):
         return self.data[idx]
+    
+def _move_measurement_to_device(measurement, device):
+    """Move measurement to device, handling various tensor types.
+    
+    Args:
+        measurement: Measurement tensor, TensorList, or list of tensors
+        device: Target device
+        
+    Returns:
+        Measurement moved to device
+    """
+    if hasattr(measurement, "to"):
+        return measurement.to(device)
+    elif isinstance(measurement, TensorList):
+        return TensorList([m.to(device) for m in measurement])
+    elif isinstance(measurement, list):
+        return [m.to(device) for m in measurement]
+    return measurement
+
+

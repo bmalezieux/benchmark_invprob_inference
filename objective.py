@@ -8,6 +8,7 @@ import torch
 from benchopt import BaseObjective
 from deepinv.loss.metric import PSNR
 
+
 from benchmark_utils import save_comparison_figure
 
 
@@ -53,8 +54,6 @@ class Objective(BaseObjective):
 
         self.ground_truth_shape = ground_truth_shape
         self.num_operators = num_operators if num_operators is not None else 1
-        self.psnr_metric = PSNR(max_pixel=max_pixel)
-        # self.ssim_metric = SSIM(max_pixel=max_pixel)
         self.min_pixel = min_pixel
         self.max_pixel = max_pixel
         self.evaluation_count = 0
@@ -76,7 +75,7 @@ class Objective(BaseObjective):
             max_pixel=self.max_pixel,
         )
 
-    def evaluate_result(self, reconstructions, name, **kwargs):
+    def evaluate_result(self, avg_psnr,  name, **kwargs):
         """Compute the objective value(s) given the output of a solver.
 
         Parameters
@@ -102,45 +101,8 @@ class Objective(BaseObjective):
             Dictionary with 'value' (negative PSNR for minimization),
             'psnr', and optional GPU/step metrics.
         """
-        with torch.no_grad():
-            # Evaluate each batch individually and compute average metrics
-            local_psnr_sum = 0.0
-            local_count = 0
-            first_ground_truth = None
-            first_reconstruction = None
-
-            # Load ground truths fresh from dataloader
-            for batch_idx, (ground_truth, _) in enumerate(self.dataloader):
-                reconstruction = reconstructions[batch_idx]
-
-                # Save first image for visualization
-                if batch_idx == 0:
-                    first_ground_truth = ground_truth
-                    first_reconstruction = reconstruction
-
-                # Ensure reconstruction is on the same device as ground truth
-                reconstruction = reconstruction.to(ground_truth.device)
-
-                batch_psnr = self.psnr_metric(reconstruction, ground_truth).item()
-                local_psnr_sum += batch_psnr * ground_truth.shape[0]
-                local_count += ground_truth.shape[0]
-            avg_psnr = local_psnr_sum / local_count if local_count > 0 else 0.0
-
-        # Save comparison figure using first image
-        output_dir = "evaluation_output/" + name.replace("/", "_").replace("..", "")
-        self.evaluation_count += 1
-        save_comparison_figure(
-            first_ground_truth,
-            first_reconstruction,
-            # metrics={'psnr': psnr, 'ssim': ssim},
-            metrics={"psnr": avg_psnr},
-            output_dir=output_dir,
-            filename=f"eval_{self.evaluation_count:04d}.png",
-            evaluation_count=self.evaluation_count,
-        )
-
         # Return value (primary metric for stopping criterion) and additional metrics
-        result = dict(value=-avg_psnr, psnr=avg_psnr)
+        result = dict(value=-avg_psnr, avg_psnr=avg_psnr)
 
         # Add all non-None metrics from kwargs to result
         for key, value in kwargs.items():
@@ -160,12 +122,5 @@ class Objective(BaseObjective):
             Dictionary with a noisy version of ground truth.
         """
         # Create noisy reconstructions for each batch
-        reconstructions = []
-        for ground_truth, _ in self.dataloader:
-            noisy_recon = ground_truth + ground_truth.std()
-            reconstructions.append(noisy_recon)
 
-        return dict(
-            reconstructions=reconstructions,
-            name="test_result",
-        )
+        return {"name": "test_result", "avg_psnr": 0.0}
