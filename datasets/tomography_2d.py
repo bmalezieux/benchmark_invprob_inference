@@ -264,23 +264,16 @@ class Dataset(BaseDataset):
             )[:-1]
 
             # Split angles among operators
-            angles_per_operator = self.num_angles // self.num_operators
-            angles_list = []
-
-            for i in range(self.num_operators):
-                start_idx = i * angles_per_operator
-                if i == self.num_operators - 1:
-                    # Last operator gets any remaining angles
-                    end_idx = self.num_angles
-                else:
-                    end_idx = (i + 1) * angles_per_operator
-
-                # Extract angle subset
-                angles_subset = angles_total[start_idx:end_idx]
-                angles_list.append(angles_subset)
-
-            print(f"Split {self.num_angles} angles into {self.num_operators} operators")
-
+            _base, _rem = divmod(self.num_angles, self.num_operators)
+            _sizes = [_base + (1 if i < _rem else 0) for i in range(self.num_operators)]
+            _split_indices = torch.cumsum(torch.tensor(_sizes[:-1]), dim=0).tolist()
+            angles_list = list(
+                torch.tensor_split(angles_total, [int(s) for s in _split_indices])
+            )
+            print(
+                f"Split {self.num_angles} angles into {self.num_operators} operators: {_sizes}"
+            )
+            print(f"Split indices: {_split_indices} ")
             # Create full operator on GPU to generate measurements
             # We need all angles to generate realistic measurements
             full_angles = angles_total
@@ -302,25 +295,14 @@ class Dataset(BaseDataset):
 
             print(f"Generated full measurement: {full_measurement.shape}")
 
-            # Split measurements according to angle division
-            # Each measurement subset corresponds to an operator's angle range
-            # Full measurement shape is (B, C, detector_width, num_angles) = (1, 1, 128, 90)
-            # We need to split along the last dimension (angles)
-            measurement_list = []
-
-            for i in range(self.num_operators):
-                start_idx = i * angles_per_operator
-                if i == self.num_operators - 1:
-                    end_idx = self.num_angles
-                else:
-                    end_idx = (i + 1) * angles_per_operator
-
-                # Extract measurement subset along the angle dimension (dimension 3)
-                meas_subset = full_measurement[:, :, :, start_idx:end_idx]
-                measurement_list.append(meas_subset)
-                print(
-                    f"Measurement {i}: shape {meas_subset.shape}, angles [{start_idx}:{end_idx}]"
+            # Split measurements along the angle dimension using the same indices
+            measurement_list = list(
+                torch.tensor_split(
+                    full_measurement, [int(s) for s in _split_indices], dim=-1
                 )
+            )
+            for i, meas_subset in enumerate(measurement_list):
+                print(f"Measurement {i}: shape {meas_subset.shape}")
 
             # Ensure data is on correct device
             ground_truth = ground_truth.to(device)

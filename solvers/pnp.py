@@ -71,24 +71,13 @@ def initialize_reconstruction(
 
     elif method == "pseudo_inverse":
         x_init = operator.A_dagger(measurements)
-        x_init = normalize(x_init, 0.0, 1.0)
+        x_init = x_init.clamp(0, 1)
         return x_init
 
     else:
         raise ValueError(
             f"Unknown initialization method: {method}. Use 'zeros' or 'pseudo_inverse'"
         )
-
-
-def normalize(x, min=0.0, max=1.0):
-    """Normalize tensor to [min, max] range."""
-    x_min = x.min()
-    x_max = x.max()
-    if x_max > x_min:
-        x_norm = (x - x_min) / (x_max - x_min)  # Normalize to [0, 1]
-        return x_norm * (max - min) + min  # Scale to [min, max]
-    else:
-        return torch.full_like(x, min)  # If constant, return min value
 
 
 class Solver(BaseSolver):
@@ -389,7 +378,7 @@ class Solver(BaseSolver):
 
                     # Clip reconstruction to valid range after denoising
                     if self.clip_range is not None:
-                        self.reconstruction = normalize(
+                        self.reconstruction = torch.clamp(
                             self.reconstruction, self.clip_range[0], self.clip_range[1]
                         )
 
@@ -470,10 +459,9 @@ class Solver(BaseSolver):
 
         # Clip initial reconstruction if requested
         if self.clip_range is not None:
-            self.reconstruction = normalize(
+            self.reconstruction = torch.clamp(
                 self.reconstruction, self.clip_range[0], self.clip_range[1]
             )
-
         # Synchronize before capturing initial state
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
