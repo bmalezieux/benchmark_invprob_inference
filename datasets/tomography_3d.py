@@ -132,7 +132,13 @@ class Dataset(BaseDataset):
             )
 
         num_measurement_angles = trajectory.shape[0]
-        angles_per_operator = num_measurement_angles // self.num_operators
+        # Balanced split: first (num_measurement_angles % num_operators) operators get one extra angle
+        _base, _rem = divmod(num_measurement_angles, self.num_operators)
+        _sizes = [_base + (1 if i < _rem else 0) for i in range(self.num_operators)]
+        _cumsum = [0] + list(torch.cumsum(torch.tensor(_sizes), dim=0).tolist())
+        print(
+            f"Split {num_measurement_angles} projections into {self.num_operators} operators: {_sizes}"
+        )
 
         # Detector size from dataset (typical for Walnut dataset)
         n_detector_pixels = (972, 768)  # (horizontal, vertical)
@@ -155,12 +161,8 @@ class Dataset(BaseDataset):
             TomographyWithAstra
                 3D tomography operator for the given angle range.
             """
-            start_idx = index * angles_per_operator
-            if index == self.num_operators - 1:
-                # Last operator takes remaining angles
-                end_idx = num_measurement_angles
-            else:
-                end_idx = (index + 1) * angles_per_operator
+            start_idx = int(_cumsum[index])
+            end_idx = int(_cumsum[index + 1])
 
             trajectory_subset = trajectory[start_idx:end_idx]
             num_angles_subset = end_idx - start_idx
@@ -246,7 +248,12 @@ class Dataset(BaseDataset):
             print("=== Sinogram Loading Complete ===\n")
 
             num_angles = sinogram_tensor.shape[3]
-            angles_per_op = num_angles // self.num_operators
+            # Balanced split: first (num_angles % num_operators) operators get one extra angle
+            _base_m, _rem_m = divmod(num_angles, self.num_operators)
+            _sizes_m = [
+                _base_m + (1 if i < _rem_m else 0) for i in range(self.num_operators)
+            ]
+            _cumsum_m = [0] + list(torch.cumsum(torch.tensor(_sizes_m), dim=0).tolist())
 
             def factory(
                 index: int, device: torch.device, shared: Optional[Dict] = None
@@ -267,11 +274,8 @@ class Dataset(BaseDataset):
                 torch.Tensor
                     Measurement tensor in ASTRA format.
                 """
-                start_idx = index * angles_per_op
-                if index == self.num_operators - 1:
-                    end_idx = num_angles
-                else:
-                    end_idx = (index + 1) * angles_per_op
+                start_idx = int(_cumsum_m[index])
+                end_idx = int(_cumsum_m[index + 1])
 
                 # Slice along the angles dimension (dim 3)
                 measurement = sinogram_tensor[:, :, :, start_idx:end_idx, :].to(device)
