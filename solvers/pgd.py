@@ -5,6 +5,7 @@ import torch
 from benchopt import BaseSolver
 from deepinv.distributed import DistributedContext, distribute
 from deepinv.optim.data_fidelity import L2
+from deepinv.optim.optim_iterators import PGDIteration
 from deepinv.optim.prior import PnP
 from deepinv.physics import Physics, stack
 from deepinv.utils.tensorlist import TensorList
@@ -23,20 +24,15 @@ def compute_step_size_from_operator(
     Args:
         operator: Physics operator (can be stacked or distributed)
         ground_truth: Ground truth tensor (used for creating example signal)
-        ctx: Optional distributed context for synchronization
 
     Returns:
         Step size (1 / lipschitz_constant)
     """
     with torch.no_grad():
-        # Create example signal for norm computation
         x_example = torch.zeros_like(
             ground_truth, device=ground_truth.device, dtype=ground_truth.dtype
         )
-
-        # Compute Lipschitz constant
         lipschitz_constant = operator.compute_norm(x_example, local_only=False)
-
         return 1.0 / lipschitz_constant if lipschitz_constant > 0 else 1.0
 
 
@@ -52,9 +48,6 @@ def initialize_reconstruction(
 
     For pseudo-inverse initialization:
         x_0 = A^dagger y
-
-    where A^dagger is the adjoint/pseudo-inverse of the operator.
-    For stacked operators, this is handled automatically.
 
     Args:
         signal_shape: Shape of the signal to initialize
@@ -81,9 +74,17 @@ def initialize_reconstruction(
 
 
 class Solver(BaseSolver):
-    """Plug-and-Play (PnP) solver with optional distributed support."""
+    """Plug-and-Play PGD solver: uses deepinv's PGDIteration with a DRUNet denoiser as prior.
 
-    name = "PnP"
+    Implements the iteration via PGDIteration:
+
+        u_k   = x_k - step_size * grad_f(x_k)
+        x_{k+1} = D_sigma(u_k)   (denoiser as proximal operator)
+
+    where f is the L2 data-fidelity and the prior is PnP with a DRUNet denoiser.
+    """
+
+    name = "PGD"
 
     requirements = [
         "pip::torch",
@@ -98,9 +99,9 @@ class Solver(BaseSolver):
     parameters = {
         "denoiser": ["drunet"],
         "denoiser_lambda_relaxation": [None],
+        "denoiser_sigma": [0.05],
         "step_size": [None],
         "step_size_scale": [0.99],
-        "denoiser_sigma": [0.05],
         "distribute_physics": [False],
         "distribute_denoiser": [False],
         "torch_compile": [False],
@@ -112,7 +113,7 @@ class Solver(BaseSolver):
         "slurm_ntasks_per_node": [1],
         "slurm_gres": ["gpu:1"],
         "torchrun_nproc_per_node": [1],
-        "name_prefix": ["pnp"],
+        "name_prefix": ["pgd"],
     }
 
     def set_objective(
@@ -128,9 +129,11 @@ class Solver(BaseSolver):
 
         Args:
             measurement: Noisy measurements (TensorList or tensor)
-            physics: Forward operator (stacked physics or list or callable)
+            physics: Forward operator (stacked physics or factory function)
             ground_truth_shape: Shape of the ground truth tensor
             num_operators: Number of operators in the physics
+            min_pixel: Minimum pixel value for clipping
+            max_pixel: Maximum pixel value for clipping
         """
         self.measurement = measurement
         self.physics = physics
@@ -143,13 +146,11 @@ class Solver(BaseSolver):
 
         # Check if distributed environment is already set up
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-            # Already initialized by dataset or previous call
             self.world_size = int(os.environ.get("WORLD_SIZE", 1))
             print(
                 f"Distributed environment already initialized: world_size={self.world_size}"
             )
         else:
-            # Try to initialize
             try:
                 import submitit
 
@@ -163,7 +164,6 @@ class Solver(BaseSolver):
             except ImportError:
                 print("submitit not installed, running in non-distributed mode")
             except RuntimeError as e:
-                # This could be SLURM not available or other runtime issues
                 error_msg = str(e).lower()
                 if "slurm" in error_msg or "environment" in error_msg:
                     print(f"SLURM environment not available: {e}")
@@ -176,13 +176,10 @@ class Solver(BaseSolver):
         self.distributed_mode = self.world_size > 1
         self.reconstruction = torch.zeros(self.ground_truth_shape)
 
-        # Initialize GPU metrics tracker (device will be set in _run_with_context)
         self.gpu_tracker = None
-
-        # Initialize results storage for per-iteration tracking
         self.all_results = []
 
-        # Generate name based on whether using slurm or torchrun
+        # Generate run name
         if hasattr(self, "slurm_ntasks_per_node") and self.slurm_ntasks_per_node > 1:
             self.name = (
                 self.name_prefix
@@ -205,19 +202,16 @@ class Solver(BaseSolver):
                 + "_single"
             )
 
-        # Add rank to name in distributed mode
         if self.distributed_mode:
             self.name = self.name + f"_rank{int(os.environ.get('RANK', 0))}"
 
     def run(self, cb):
-        """Run the PnP algorithm with callback for iteration control.
+        """Run the PGD algorithm with callback for iteration control.
 
         Args:
             cb: Callback function to call at each iteration. Returns False when to stop.
         """
         if self.distributed_mode:
-            # Use cleanup=True to properly destroy process group when done
-            # This will reuse the process group created by dataset (if any)
             with DistributedContext(seed=42, cleanup=True) as ctx:
                 self.ctx = ctx
                 self._run_with_context(cb, ctx)
@@ -225,17 +219,16 @@ class Solver(BaseSolver):
             self._run_with_context(cb, ctx=None)
 
     def _setup_components(self, device, ctx=None):
-        """Setup denoiser, prior, and data fidelity.
+        """Build the denoiser, prior, data-fidelity, and PGD iterator.
 
         Args:
-            device: Device to use
-            ctx: Optional distributed context for distributing components
+            device: Torch device to use.
+            ctx: Optional distributed context.
 
         Returns:
-            Tuple of (prior, data_fidelity)
+            Tuple of (pgd_iter, prior, data_fidelity)
         """
         if self.denoiser == "drunet":
-            # Use the utility function to create appropriate DRUNet
             denoiser = create_drunet_denoiser(
                 ground_truth_shape=self.ground_truth_shape,
                 device=device,
@@ -244,7 +237,6 @@ class Solver(BaseSolver):
         else:
             raise ValueError(f"Unknown denoiser: {self.denoiser}")
 
-        # Distribute denoiser if context provided and requested
         if ctx is not None and self.distribute_denoiser:
             denoiser = distribute(
                 denoiser,
@@ -261,55 +253,43 @@ class Solver(BaseSolver):
         if self.torch_compile:
             denoiser = torch.compile(denoiser)
 
-        # Create prior and data fidelity
         prior = PnP(denoiser=denoiser)
         data_fidelity = L2()
 
         if ctx is not None and self.distribute_physics:
-            data_fidelity = distribute(
-                data_fidelity,
-                ctx,
-            )
+            data_fidelity = distribute(data_fidelity, ctx)
 
         if self.torch_compile:
             data_fidelity = torch.compile(data_fidelity)
 
-        return prior, data_fidelity
+        pgd_iter = PGDIteration(has_cost=False)
+
+        return pgd_iter, prior, data_fidelity
 
     def _compute_step_size(self, physics, device):
-        """Compute step size from physics operator.
+        """Compute step size from physics operator Lipschitz constant.
 
         Args:
-            physics: Physics operator (can be stacked or distributed)
-            device: Device to use
+            physics: Physics operator
+            device: Torch device
 
         Returns:
             Step size value
         """
-
         if isinstance(self.step_size, float):
             return self.step_size
 
-        # Create example signal for norm computation
         ground_truth_example = torch.zeros(self.ground_truth_shape, device=device)
-
-        raw_step_size = compute_step_size_from_operator(
-            physics,
-            ground_truth_example,
-        )
-
-        step_size = raw_step_size * self.step_size_scale
-
-        return step_size
+        raw_step_size = compute_step_size_from_operator(physics, ground_truth_example)
+        return raw_step_size * self.step_size_scale
 
     def _initialize_reconstruction(self, physics, measurements, device):
-        """Initialize reconstruction signal.
+        """Initialize the reconstruction.
 
         Args:
-            physics: Physics operator (can be stacked or distributed)
+            physics: Physics operator
             measurements: Measurements
-            device: Device to use
-            ctx: Optional distributed context
+            device: Torch device
 
         Returns:
             Initialized reconstruction tensor
@@ -323,31 +303,41 @@ class Solver(BaseSolver):
                 method=self.init_method,
             )
 
-    def _run_pnp_iterations(
-        self, prior, data_fidelity, physics, measurements, step_size, cb
+    def _run_pgd_iterations(
+        self, pgd_iter, prior, data_fidelity, physics, measurements, step_size, cb
     ):
-        """Run PnP iterations.
+        """Run PGD iterations using deepinv's PGDIteration.
+
 
         Args:
-            x: Initial reconstruction
-            prior: PnP prior
+            pgd_iter: PGDIteration instance from deepinv
+            prior: Pnp Prior instance
             data_fidelity: L2 data fidelity
             physics: Physics operators
             measurements: Measurements
-            step_size: Step size for gradient descent
-            cb: Callback function
-            ctx: Optional distributed context
-
-        Returns:
-            Final reconstruction
+            step_size: Gradient descent step size
+            cb: Benchopt callback
         """
+        if self.denoiser_lambda_relaxation is not None:
+            lamda = self.denoiser_lambda_relaxation
+            beta = (step_size * lamda) / (1 + step_size * lamda)
+        else:
+            beta = 1.0
+
+        cur_params = {
+            "stepsize": step_size,
+            "lambda": 1.0,
+            "g_param": self.denoiser_sigma,
+            "beta": beta,
+        }
+
         with torch.no_grad():
 
             while True:
                 keep_going = cb()
 
                 if self.distributed_mode and self.ctx is not None:
-                    # Synchronize stopping criterion
+                    # Synchronize stopping criterion across ranks
                     decision = torch.tensor([float(keep_going)], device=self.device)
                     self.ctx.broadcast(decision, src=0)
                     keep_going = bool(decision.item())
@@ -355,61 +345,36 @@ class Solver(BaseSolver):
                 if not keep_going:
                     break
 
-                # Reset iteration tracking for new iteration
                 self.gpu_tracker.reset_iteration_tracking()
 
-                # ===== GRADIENT STEP =====
-                with self.gpu_tracker.track_step("gradient"):
-                    x_before = self.reconstruction
-                    # Data fidelity gradient step
-                    grad = data_fidelity.grad(
-                        self.reconstruction, measurements, physics
+                # ===== PGD STEP (gradient + proximal via deepinv) =====
+                with self.gpu_tracker.track_step("pgd"):
+                    X = {"est": [self.reconstruction]}
+                    X = pgd_iter(
+                        X, data_fidelity, prior, cur_params, measurements, physics
                     )
-                    # Gradient descent step
-                    self.reconstruction = self.reconstruction - step_size * grad
+                    self.reconstruction = X["est"][0]
 
-                # ===== DENOISING STEP =====
-                with self.gpu_tracker.track_step("denoise"):
-                    # Denoising step
-                    if self.denoiser_lambda_relaxation is None:
-                        self.reconstruction = prior.prox(
-                            self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                        )
-                    else:
-                        denoised_reconstruction = prior.prox(
-                            self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                        )
-                        lamda = self.denoiser_lambda_relaxation
-                        alpha = (step_size * lamda) / (1 + step_size * lamda)
-                        self.reconstruction = (
-                            1 - alpha
-                        ) * x_before + alpha * denoised_reconstruction
-
-                    # Clip reconstruction to valid range after denoising
+                    # Clip to valid pixel range
                     if self.clip_range is not None:
                         self.reconstruction = torch.clamp(
                             self.reconstruction, self.clip_range[0], self.clip_range[1]
                         )
 
-                # Synchronize all CUDA operations and distributed processes
-                # This ensures accurate timing measurements
+                # Synchronize CUDA for accurate timing
                 if self.device.type == "cuda":
                     torch.cuda.synchronize(self.device)
 
-                # Capture iteration metrics after both steps complete
                 iteration_result = self.gpu_tracker.capture_iteration_result()
                 self.all_results.append(iteration_result)
 
     def _run_with_context(self, cb, ctx=None):
-        """Run PnP with optional distributed context.
-
-        This unified method handles both single-process and distributed execution.
+        """Run PGD with optional distributed context.
 
         Args:
-            cb: Callback function
-            ctx: Optional distributed context (None for single-process)
+            cb: Benchopt callback
+            ctx: Optional DistributedContext (None for single-process)
         """
-
         # Determine device
         if ctx is not None:
             self.device = ctx.device
@@ -419,7 +384,7 @@ class Solver(BaseSolver):
         # Initialize GPU metrics tracker
         self.gpu_tracker = GPUMetricsTracker(device=self.device)
 
-        # Move measurement to correct device
+        # Move measurements to device
         if hasattr(self.measurement, "to"):
             measurement = self.measurement.to(self.device)
         elif isinstance(self.measurement, list):
@@ -427,9 +392,8 @@ class Solver(BaseSolver):
         else:
             measurement = self.measurement
 
-        # Handle physics: can be stacked physics, factory function, or list
+        # Prepare physics
         if ctx is not None and self.distribute_physics:
-            # In distributed mode with distribute_physics=True
             physics = distribute(
                 self.physics,
                 ctx,
@@ -437,71 +401,63 @@ class Solver(BaseSolver):
                 type_object="linear_physics",
             )
         elif callable(self.physics) and not isinstance(self.physics, Physics):
-            # Factory function in single-process mode: instantiate all operators and stack them
-            physics_list = []
-            for i in range(self.num_operators):
-                op = self.physics(i, self.device, None)
-                physics_list.append(op)
+            # Factory function → instantiate and stack all operators
+            physics_list = [
+                self.physics(i, self.device, None) for i in range(self.num_operators)
+            ]
             physics = stack(*physics_list)
         else:
-            # Already a stacked physics or single physics operator
             physics = self.physics
             if hasattr(physics, "to"):
                 physics = physics.to(self.device)
 
-        # Setup components
-        prior, data_fidelity = self._setup_components(self.device, ctx)
-        # cb()
+        # Build components
+        pgd_iter, prior, data_fidelity = self._setup_components(self.device, ctx)
         print("Components set up.")
 
         # Compute step size
         step_size = self._compute_step_size(physics, self.device)
-        # cb()
         print("Step size computed:", step_size)
 
         # Initialize reconstruction
         self.reconstruction = self._initialize_reconstruction(
             physics, measurement, self.device
         )
-        # cb()
         print("Reconstruction initialized.")
 
-        # Clip initial reconstruction if requested
         if self.clip_range is not None:
             self.reconstruction = torch.clamp(
                 self.reconstruction, self.clip_range[0], self.clip_range[1]
             )
-        # Synchronize before capturing initial state
+
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
 
-        print("Starting PnP iterations.")
+        print("Starting PGD iterations.")
 
-        # Run PnP iterations
-        self._run_pnp_iterations(
-            prior, data_fidelity, physics, measurement, step_size, cb
+        # Run iterations
+        self._run_pgd_iterations(
+            pgd_iter, prior, data_fidelity, physics, measurement, step_size, cb
         )
 
-        # Synchronize at the end of the run to ensure benchopt captures the full execution time
-        # This must be done BEFORE the context manager exits
+        # Final synchronization before context exit
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
         if ctx is not None:
             ctx.barrier()
 
-        # Save results to file (both distributed and single-GPU modes)
+        # Save per-rank results to file
         save_result_per_rank(self.all_results, self.name, self.max_batch_size)
 
     def get_result(self):
-        """Return the reconstruction result.
+        """Return the reconstruction result with GPU and timing metrics.
 
         Returns:
-            dict: Dictionary with 'reconstruction' key, GPU memory snapshot,
-            and per-step metrics (gradient and denoise timing/memory)
+            dict with 'reconstruction', 'name', GPU memory stats,
+            and per-step timing/memory metrics (pgd).
         """
         result = dict(reconstruction=self.reconstruction, name=self.name)
 
-        # Add GPU memory snapshot
         if self.gpu_tracker is not None:
             gpu_mem = self.gpu_tracker.get_gpu_memory_snapshot()
             result.update(
@@ -513,7 +469,6 @@ class Solver(BaseSolver):
                 }
             )
 
-            # Add per-step metrics
             all_step_metrics = self.gpu_tracker.get_all_step_metrics()
             for step_name, metrics in all_step_metrics.items():
                 result[f"{step_name}_time_sec"] = metrics["time_sec"]
