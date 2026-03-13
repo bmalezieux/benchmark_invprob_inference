@@ -48,7 +48,9 @@ def create_config_label(row, multi_solver=False, multi_compile=False):
 
     if multi_solver:
         solver_name = row.get("p_solver_name_prefix", None)
-        if solver_name and not (hasattr(solver_name, '__float__') and pd.isna(solver_name)):
+        if solver_name and not (
+            hasattr(solver_name, "__float__") and pd.isna(solver_name)
+        ):
             parts.append(str(solver_name).upper())
 
     parts.append(f"{ngpu} GPU{'s' if ngpu > 1 else ''}")
@@ -89,7 +91,10 @@ def read_parquet_data(output_dir):
         and parquet_df["p_solver_torch_compile"].nunique(dropna=True) > 1
     )
     parquet_df["config_label"] = parquet_df.apply(
-        lambda row: create_config_label(row, multi_solver=multi_solver, multi_compile=multi_compile), axis=1
+        lambda row: create_config_label(
+            row, multi_solver=multi_solver, multi_compile=multi_compile
+        ),
+        axis=1,
     )
     parquet_df.sort_values(by=["ngpu", "batch"], inplace=True)
 
@@ -177,7 +182,16 @@ def plot_psnr_vs_metric(
     return fig
 
 
-_COLOR_CYCLE = ["steelblue", "darkorange", "mediumseagreen", "mediumpurple", "tomato", "goldenrod", "orchid", "teal"]
+_COLOR_CYCLE = [
+    "steelblue",
+    "darkorange",
+    "mediumseagreen",
+    "mediumpurple",
+    "tomato",
+    "goldenrod",
+    "orchid",
+    "teal",
+]
 
 
 def _detect_step_columns(parquet_df, suffix):
@@ -186,7 +200,7 @@ def _detect_step_columns(parquet_df, suffix):
     steps = []
     for col in parquet_df.columns:
         if col.startswith(prefix) and col.endswith(suffix):
-            step = col[len(prefix): -len(suffix)].rstrip("_")
+            step = col[len(prefix) : -len(suffix)].rstrip("_")
             if parquet_df[col].notna().any():
                 steps.append((step, col))
     return steps
@@ -199,19 +213,19 @@ def plot_time_breakdown_stacked(parquet_df, output_dir):
     agg_dict = {col: "mean" for _, col in step_cols}
     agg_dict.update({"ngpu": "first", "batch": "first"})
 
-    agg_data = (
-        parquet_df.groupby("config_label")
-        .agg(agg_dict)
-        .reset_index()
+    agg_data = parquet_df.groupby("config_label").agg(agg_dict).reset_index()
+    agg_data["total_time"] = agg_data[[col for _, col in step_cols]].sum(
+        axis=1, skipna=True
     )
-    agg_data["total_time"] = agg_data[[col for _, col in step_cols]].sum(axis=1, skipna=True)
     agg_data.sort_values(by=["ngpu", "batch"], inplace=True)
 
     fig = go.Figure()
     for i, (step, col) in enumerate(step_cols):
         color = _COLOR_CYCLE[i % len(_COLOR_CYCLE)]
         is_last = i == len(step_cols) - 1
-        pct = (agg_data[col].fillna(0) / agg_data["total_time"].replace(0, float("nan"))) * 100
+        pct = (
+            agg_data[col].fillna(0) / agg_data["total_time"].replace(0, float("nan"))
+        ) * 100
         fig.add_trace(
             go.Bar(
                 name=step.capitalize(),
@@ -278,11 +292,7 @@ def plot_gpu_memory_from_parquet(parquet_df, output_dir):
     agg_dict = {col: "mean" for _, col in step_cols}
     agg_dict.update({"ngpu": "first", "batch": "first"})
 
-    agg_data = (
-        parquet_df.groupby("config_label")
-        .agg(agg_dict)
-        .reset_index()
-    )
+    agg_data = parquet_df.groupby("config_label").agg(agg_dict).reset_index()
     agg_data.sort_values(by=["ngpu", "batch"], inplace=True)
 
     fig = go.Figure()

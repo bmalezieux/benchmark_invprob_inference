@@ -311,7 +311,7 @@ class Solver(BaseSolver):
 
         Args:
             pgd_iter: PGDIteration instance from deepinv
-            prior: Pnp Prior instance 
+            prior: Pnp Prior instance
             data_fidelity: L2 data fidelity
             physics: Physics operators
             measurements: Measurements
@@ -350,7 +350,9 @@ class Solver(BaseSolver):
                 # ===== PGD STEP (gradient + proximal via deepinv) =====
                 with self.gpu_tracker.track_step("pgd"):
                     X = {"est": [self.reconstruction]}
-                    X = pgd_iter(X, data_fidelity, prior, cur_params, measurements, physics)
+                    X = pgd_iter(
+                        X, data_fidelity, prior, cur_params, measurements, physics
+                    )
                     self.reconstruction = X["est"][0]
 
                     # Clip to valid pixel range
