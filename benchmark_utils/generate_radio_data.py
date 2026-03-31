@@ -1,7 +1,7 @@
-import argparse
 import sys
+import argparse
 from pathlib import Path
-
+import numpy as np
 from astropy.io import fits
 
 # Add benchmark root to sys.path to resolve benchmark_utils imports when run as script
@@ -28,15 +28,14 @@ def generate_data_for_size(cfg, image_size):
     end_frequency_hz = float(cfg.end_frequency_hz)
     number_of_channels = int(cfg.number_of_channels)
     add_noise = bool(cfg.add_noise)
-    noise_rms_percent = getattr(cfg, "noise_rms_percent", None)
-    if noise_rms_percent is not None:
-        noise_rms_percent = float(noise_rms_percent)
+    pol_mode = str(cfg.pol_mode)
 
+    
     # Cache directory
     data_path = Path(data_path)
     ms_cache_dir = data_path / "meerkat_cache"
     ms_cache_dir.mkdir(parents=True, exist_ok=True)
-
+    
     # Verify/Load image
     fits_file = data_path / fits_name
     if not fits_file.exists():
@@ -47,7 +46,7 @@ def generate_data_for_size(cfg, image_size):
         if not fits_file.exists():
             print(f"Could not find {fits_name} in {data_path} or {default_data_dir}")
             return
-
+            
     fits_stem = Path(fits_name).stem
     resized_fits_path = ms_cache_dir / f"{fits_stem}_{image_size}.fits"
 
@@ -66,12 +65,10 @@ def generate_data_for_size(cfg, image_size):
             return
 
         new_header = load_new_header(fits_file, image_size)
-        fits.PrimaryHDU(data=resized_img, header=new_header).writeto(
-            resized_fits_path, overwrite=True
-        )
+        fits.PrimaryHDU(data=resized_img, header=new_header).writeto(resized_fits_path, overwrite=True)
 
     print(f"Generating data for image size {image_size} with use_gpus={use_gpus}")
-
+    
     # Generate visibilities
     vis_path = generate_meerkat_visibilities(
         resized_fits_path,
@@ -86,28 +83,24 @@ def generate_data_for_size(cfg, image_size):
         pos_dec=pos_dec,
         random_position=random_position,
         add_noise=add_noise,
-        noise_rms_percent=noise_rms_percent,
+        pol_mode=pol_mode,
     )
 
     print(f"Ground truth cached at: {resized_fits_path}")
 
     print(f"Visibilities ready for size {image_size}: {vis_path}")
 
-
 def main_generation_loop(cfg):
     for size in cfg.image_size:
         generate_data_for_size(cfg, size)
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to YAML config file"
-    )
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     args = parser.parse_args()
     cfg = load_config(args.config, section="job")
-
-    # Check if GPU is available
+    
+    # Check if GPU is available 
     # In karabo env, we assume cpu usually, or if torch is missing we definitely use cpu
     # But this script is running in karabo env WITHOUT torch.
     use_gpus = bool(cfg.use_gpus)

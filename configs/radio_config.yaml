@@ -3,17 +3,20 @@ objective:
 
 dataset:
   - radio_interferometry:
-      fits_name : "m1_n.fits"
-      image_size: 1024
+      fits_name : "m101_g.fits"
+      image_size: 4000
       noise_level: 0.1
-      simulator_hash: # Required. If null, dataset lists available hashes.
+      simulator_hash: "90hg875df90l862k999knf6394091mp4"
 
 solver:
   - PnP:
       denoiser: drunet
-      denoiser_sigma: 0.1
+      denoiser_sigma: [0.2]
       distribute_physics: False
       distribute_denoiser: False
       init_method: 'pseudo_inverse'
-      step_size_scale: 0.9
+      step_size_scale: [0.01]
+      slurm_gres, slurm_ntasks_per_node, distribute_physics, distribute_denoiser, patch_size, denoiser_sigma, denoiser_lambda_relaxation: [
+        ["gpu:0", 4, true, true, [512], 0.1, 0.05]
+      ]
       

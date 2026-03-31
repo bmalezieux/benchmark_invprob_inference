@@ -7,9 +7,14 @@ and optionally saves comparison figures for visual inspection.
 from pathlib import Path
 
 import torch
+<<<<<<< HEAD
 from astropy.io import fits
+=======
+from pathlib import Path
+>>>>>>> radio_meerkat_simu
 from benchopt import BaseObjective
-from deepinv.loss.metric import PSNR
+from deepinv.loss.metric import PSNR, SSIM, MSE, LPIPS
+from astropy.io import fits
 
 from benchmark_utils import save_comparison_figure
 
@@ -62,7 +67,9 @@ class Objective(BaseObjective):
         )
         self.num_operators = num_operators if num_operators is not None else 1
         self.psnr_metric = PSNR(max_pixel=max_pixel)
-        # self.ssim_metric = SSIM(max_pixel=max_pixel)
+        self.ssim_metric = SSIM(max_pixel=max_pixel)
+        self.mse_metric = MSE()
+        self.lpips_metric = LPIPS()
         self.min_pixel = min_pixel
         self.max_pixel = max_pixel
         self.evaluation_count = 0
@@ -115,7 +122,9 @@ class Objective(BaseObjective):
             reconstruction = reconstruction.to(self.ground_truth.device)
 
             psnr_tensor = self.psnr_metric(reconstruction, self.ground_truth)
-            # ssim_tensor = self.ssim_metric(reconstruction, self.ground_truth)
+            ssim_tensor = self.ssim_metric(reconstruction, self.ground_truth)
+            mse_tensor = self.mse_metric(reconstruction, self.ground_truth)
+            lpips_tensor = self.lpips_metric(reconstruction, self.ground_truth)
 
             # Handle batch case - take mean across batch dimension
             psnr = (
@@ -123,10 +132,21 @@ class Objective(BaseObjective):
                 if psnr_tensor.numel() > 1
                 else psnr_tensor.item()
             )
-            # ssim = (
-            #     ssim_tensor.mean().item()
-            #     if ssim_tensor.numel() > 1
-            #     else ssim_tensor.item()
+            ssim = (
+                ssim_tensor.mean().item()
+                if ssim_tensor.numel() > 1
+                else ssim_tensor.item()
+            )
+            mse = (
+                mse_tensor.mean().item()
+                if mse_tensor.numel() > 1
+                else mse_tensor.item()
+            )
+            lpips = (
+                lpips_tensor.mean().item()
+                if lpips_tensor.numel() > 1
+                else lpips_tensor.item()
+            )
             # )
 
             # Save comparison figure
@@ -136,7 +156,7 @@ class Objective(BaseObjective):
                 self.ground_truth,
                 reconstruction,
                 # metrics={'psnr': psnr, 'ssim': ssim},
-                metrics={"psnr": psnr},
+                metrics={"psnr": psnr, "ssim": ssim, "mse": mse, "lpips": lpips},
                 output_dir=output_dir,
                 filename=f"eval_{self.evaluation_count:04d}.png",
                 evaluation_count=self.evaluation_count,
@@ -145,15 +165,19 @@ class Objective(BaseObjective):
             reconstruction_np = (
                 reconstruction.detach().cpu().to(torch.float32).numpy().squeeze()
             )
+<<<<<<< HEAD
             fits_path = (
                 Path(output_dir)
                 / f"eval_{self.evaluation_count:04d}_reconstruction.fits"
             )
+=======
+            fits_path = Path(output_dir) / f"eval_{self.evaluation_count:04d}_reconstruction.fits"
+>>>>>>> radio_meerkat_simu
             fits_path.parent.mkdir(parents=True, exist_ok=True)
             fits.PrimaryHDU(reconstruction_np).writeto(fits_path, overwrite=True)
 
         # Return value (primary metric for stopping criterion) and additional metrics
-        result = dict(value=-psnr, psnr=psnr)
+        result = dict(value=-psnr, psnr=psnr, ssim=ssim, mse=mse, lpips=lpips)
 
         # Add all non-None metrics from kwargs to result
         for key, value in kwargs.items():

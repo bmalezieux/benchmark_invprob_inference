@@ -5,13 +5,11 @@ including visualization and data loading helpers.
 """
 
 from pathlib import Path
-
 import matplotlib.pyplot as plt
-
 try:
     import torch
-    from deepinv.models import DRUNet
     from deepinv.utils.demo import download_example, load_image
+    from deepinv.models import DRUNet
 except ImportError:
     torch = None
     download_example = None
@@ -154,9 +152,10 @@ def save_comparison_figure(
     recon_img = tensor_to_numpy(reconstruction)
     psnr = metrics.get("psnr", 0)
     ssim = metrics.get("ssim", 0)
+    lpips = metrics.get("lpips", 0)
     axes[1].imshow(recon_img, cmap="gray" if recon_img.ndim == 2 else None)
     axes[1].set_title(
-        f"Reconstruction\nPSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}",
+        f"Reconstruction\nPSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, LPIPS: {lpips:.4f}",
         fontsize=14,
         fontweight="bold",
     )
@@ -219,7 +218,7 @@ def load_cached_example(name, cache_dir=None, **kwargs):
         return load_image(str(cached_file), **kwargs)
 
 
-def create_drunet_denoiser(ground_truth_shape, device="cpu", dtype=None):
+def create_drunet_denoiser(ground_truth_shape, device='cpu', dtype=None):
     """Create a DRUNet denoiser appropriate for the given ground truth shape.
 
     Automatically detects whether to use:

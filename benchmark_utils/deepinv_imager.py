@@ -46,7 +46,7 @@ class DeepinvDirtyImager(torch.nn.Module):
     """
 
     def __init__(
-        self, config: DirtyImagerConfig, device=DEFAULT_DEVICE, verbose: int = 0
+        self, config: DirtyImagerConfig, device=torch.device("cpu"), verbose: int = 0
     ) -> None:
         """Initializes the instance with a config.
 
