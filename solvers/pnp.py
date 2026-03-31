@@ -72,7 +72,6 @@ def initialize_reconstruction(
     elif method == "pseudo_inverse":
         #x_init = operator.A_dagger(measurements)
         x_init = operator.A_adjoint(measurements)
-        x_init = normalize(x_init, 0.0, 1.0)
         return x_init
 
     else:
@@ -369,35 +368,24 @@ class Solver(BaseSolver):
                     )
                     # Gradient descent step
                     self.reconstruction = self.reconstruction - step_size * grad
-                
-                # Clip reconstruction to valid range after denoising
-                if self.clip_range is not None:
-                    self.reconstruction = torch.clamp(
-                        self.reconstruction, self.clip_range[0], self.clip_range[1]
-                    )
 
                 # ===== DENOISING STEP =====
                 with self.gpu_tracker.track_step("denoise"):
-                    # Denoising step
+                    x_01 = (self.reconstruction - self.norm_min) / self.norm_scale
+
+                    # Denoiser (DRUNet always receives and returns values in [0, 1]).
                     if self.denoiser_lambda_relaxation is None:
-                       self.reconstruction = prior.prox(
-                           self.reconstruction, sigma_denoiser=self.denoiser_sigma
-                       )
+                        x_01 = prior.prox(x_01, sigma_denoiser=self.denoiser_sigma)
                     else:
-                        denoised_reconstruction = prior.prox(
-                            self.reconstruction, sigma_denoiser=self.denoiser_sigma
+                        x_01_denoised = prior.prox(
+                            x_01, sigma_denoiser=self.denoiser_sigma
                         )
                         lamda = self.denoiser_lambda_relaxation
                         alpha = (step_size * lamda) / (1 + step_size * lamda)
-                        self.reconstruction = (
-                            1 - alpha
-                        ) * self.reconstruction + alpha * denoised_reconstruction
+                        x_01 = (1 - alpha) * x_01 + alpha * x_01_denoised
 
-                    # Clip reconstruction to valid range after denoising
-                    if self.clip_range is not None:
-                        self.reconstruction = torch.clamp(
-                            self.reconstruction, self.clip_range[0], self.clip_range[1]
-                        )
+                    # Map back to physical domain using the same FIXED constants.
+                    self.reconstruction = x_01 * self.norm_scale + self.norm_min
 
                 # Synchronize all CUDA operations and distributed processes
                 # This ensures accurate timing measurements
@@ -471,13 +459,15 @@ class Solver(BaseSolver):
         self.reconstruction = self._initialize_reconstruction(
             physics, measurement, self.device
         )
-        print("Reconstruction initialized.")
-
-        # Clip initial reconstruction if requested
-        if self.clip_range is not None:
-            self.reconstruction = normalize(
-                self.reconstruction, self.clip_range[0], self.clip_range[1]
+        with torch.no_grad():
+            self.norm_min = self.reconstruction.min().item()
+            self.norm_scale = max(
+                (self.reconstruction.max() - self.reconstruction.min()).item(), 1e-10
             )
+        print(
+            f"Reconstruction initialized. "
+            f"Physical range: [{self.norm_min:.4g}, {self.norm_min + self.norm_scale:.4g}]"
+        )
 
         # Synchronize before capturing initial state
         if self.device.type == "cuda":
@@ -507,7 +497,12 @@ class Solver(BaseSolver):
             dict: Dictionary with 'reconstruction' key, GPU memory snapshot,
             and per-step metrics (gradient and denoise timing/memory)
         """
-        result = dict(reconstruction=self.reconstruction, name=self.name)
+        with torch.no_grad():
+            reconstruction = (
+                self.reconstruction - self.norm_min
+            ) / self.norm_scale
+            #reconstruction = reconstruction.clamp(0.0, 1.0)
+        result = dict(reconstruction=reconstruction, name=self.name)
 
         # Add GPU memory snapshot
         if self.gpu_tracker is not None:
